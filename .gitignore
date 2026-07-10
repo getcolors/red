@@ -2,6 +2,7 @@
 !.gitignore
 !.github/
 !.lsp
+!.nojekyll
 .lsp/.*
 /dist/
 /target/
