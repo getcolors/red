@@ -1,0 +1,29 @@
+{
+  "name": "red",
+  "version": "0.1.0",
+  "description": "Idempotent devops CLIs: desired state in YAML, workflows as step graphs threaded by a plain object, template-scaffolded config files, OpenTofu and Ansible as the muscle. TypeScript/Bun port of green.",
+  "type": "module",
+  "license": "EPL-1.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./workflow": "./src/workflow.ts",
+    "./advice": "./src/advice.ts",
+    "./scaffold": "./src/scaffold.ts",
+    "./tofu": "./src/tofu.ts",
+    "./ansible": "./src/ansible.ts",
+    "./dry-run": "./src/dry-run.ts",
+    "./progress": "./src/progress.ts",
+    "./cli": "./src/cli.ts",
+    "./runtime": "./src/runtime.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "selmer": "github:bigconfig-ai/Selmer#394bfc3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  }
+}

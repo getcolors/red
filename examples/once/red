@@ -1,0 +1,255 @@
+#!/usr/bin/env bun
+// Self-contained red CLI for a single-machine PaaS in the style of
+// Basecamp ONCE. One VPS runs a dockerized website operated by ONCE; red
+// provisions the infra with OpenTofu (fake HCL, locals/output only) and
+// scaffolds the Ansible config that would configure the box.
+//
+//   ./red create   |   ./red create --dry-run   |   ./red delete
+//
+// Graph:
+//   compute -+                              +-> ansible-local  (~/.ssh/config)
+//            +-> dns -> smtp-post ----------+
+//   smtp ----+                              +-> ansible-remote (playbook)
+//
+// See SPEC.md for the full design.
+
+import cloudflareTf from "./resources/once/cloudflare/main.tf" with { type: "text" };
+import doTf from "./resources/once/do/main.tf" with { type: "text" };
+import ociTf from "./resources/once/oci/main.tf" with { type: "text" };
+import playbookYml from "./resources/once/playbook.yml" with { type: "text" };
+import smtpPostTf from "./resources/once/smtp-post/main.tf" with { type: "text" };
+import smtpTf from "./resources/once/smtp/main.tf" with { type: "text" };
+import sshConfig from "./resources/once/ssh-config" with { type: "text" };
+import { execCli, runCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import { renderTemplate, scaffold, type Template } from "../../src/scaffold.ts";
+import * as tofu from "../../src/tofu.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { adviceAdd, workflow } from "../../src/workflow.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+
+const scriptDir = import.meta.dir;
+
+// --- paths: one isolated tofu working dir per step ----------------------------
+// Dir names are the generic resource they hold (server, smtp), not the step.
+
+const examplePath = (p?: string) =>
+  p === undefined ? undefined : p.startsWith("/") ? p : `${scriptDir}/${p}`;
+
+const workdir = (opts: Opts) => examplePath(opts["once/workdir"]);
+const stepDir = (opts: Opts, nm: string) => `${workdir(opts)}/${nm}`;
+const serverDir = (opts: Opts) => stepDir(opts, "server");
+const smtpDir = (opts: Opts) => stepDir(opts, "smtp");
+const dnsDir = (opts: Opts) => stepDir(opts, "dns");
+const smtpPostDir = (opts: Opts) => stepDir(opts, "smtp-post");
+
+// --- domain discovery from once/website ---------------------------------------
+
+// example.com from chat.example.com (last two labels).
+const apex = (hostname: string) => hostname.split(".").slice(-2).join(".");
+
+// The smtp identity is always notifications.<domain>.<tld>, derived from the
+// website hostnames' apex.
+const sendingDomain = (opts: Opts) =>
+  `notifications.${apex(opts["once/website"][0].hostname)}`;
+
+// --- provider-swap advice (headline) --------------------------------------------
+// Exactly the tofu backend-as-advice idiom: a `before` advice that scaffolds
+// the provider-specific main.tf before `compute` runs. Swap clouds by
+// re-adding under the same "once/provider" id — downstream steps never learn
+// which cloud produced the host.
+
+export const providerAdvice = (template: Template, dirFn: (opts: Opts) => string) =>
+  (opts: Opts): Opts => {
+    const dir = dirFn(opts);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      `${dir}/main.tf`,
+      renderTemplate(template, { host: opts["once/host"], ssh: opts["once/ssh"] }),
+    );
+    return opts;
+  };
+
+export const digitaloceanProvider = providerAdvice(
+  { name: "once/do/main.tf", content: doTf },
+  serverDir,
+);
+export const ociProvider = providerAdvice(
+  { name: "once/oci/main.tf", content: ociTf },
+  serverDir,
+);
+
+// --- tofu steps -------------------------------------------------------------------
+
+const startStep: StepFn = (opts) => opts;
+
+// compute is a bare tofu run: its main.tf is written by the "once/provider"
+// advice and its backend.tf by the "once/backend" advice, both `before`.
+const computeStep: StepFn = (opts) => tofu.tofuStep(opts, { dir: serverDir(opts) });
+
+// Scaffold main.tf then apply (create); or destroy then remove main.tf
+// (delete). The zookeeper node-step pattern.
+async function tofuWithSpec(
+  opts: Opts,
+  dir: string,
+  specs: Parameters<typeof scaffold>[1],
+): Promise<Opts> {
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir });
+    return (out["red/exit"] ?? 0) > 0 ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir });
+}
+
+const smtpStep: StepFn = (opts) => {
+  const dir = smtpDir(opts);
+  const specs = [
+    {
+      template: { name: "once/smtp/main.tf", content: smtpTf },
+      target: `${dir}/main.tf`,
+      data: {
+        subdomain: sendingDomain(opts),
+        id: `snd-${apex(opts["once/website"][0].hostname).replaceAll(".", "-")}`,
+        username: "resend",
+        password: "mock-smtp-secret",
+      },
+    },
+  ];
+  return tofuWithSpec(opts, dir, specs);
+};
+
+// dns joins compute and smtp: it needs compute's ip and smtp's records. It
+// also carries the two provisioning outputs forward (once/server, once/smtp)
+// so smtp-post and the ansible steps can read them without red/branches.
+const dnsStep: StepFn = (opts) => {
+  const dir = dnsDir(opts);
+  const outs = opts["red/branches"].map((b: Opts) => b["tofu/outputs"]);
+  const computeOut = outs.find((o: Opts) => o?.ip);
+  const smtpOut = outs.find((o: Opts) => o?.records);
+  const specs = [
+    {
+      template: { name: "once/cloudflare/main.tf", content: cloudflareTf },
+      target: `${dir}/main.tf`,
+      data: {
+        ip: computeOut?.ip,
+        hostnames: opts["once/website"].map((w: { hostname: string }) => w.hostname),
+        email: smtpOut?.records,
+      },
+    },
+  ];
+  return tofuWithSpec(
+    { ...opts, "once/server": computeOut, "once/smtp": smtpOut },
+    dir,
+    specs,
+  );
+};
+
+const smtpPostStep: StepFn = (opts) => {
+  const dir = smtpPostDir(opts);
+  const specs = [
+    {
+      template: { name: "once/smtp-post/main.tf", content: smtpPostTf },
+      target: `${dir}/main.tf`,
+      data: { id: opts["once/smtp"]?.id, subdomain: sendingDomain(opts) },
+    },
+  ];
+  return tofuWithSpec(opts, dir, specs);
+};
+
+// --- scaffold-only steps (no command) -----------------------------------------------
+
+// ansible-local configures the OPERATOR's machine: a ~/.ssh/config Host entry
+// for the new VPS, rendered as a fragment to Include.
+const ansibleLocalStep: StepFn = (opts) => {
+  const srv = opts["once/server"];
+  const specs = [
+    {
+      template: { name: "once/ssh-config", content: sshConfig },
+      target: `${workdir(opts)}/ansible-local/config`,
+      data: {
+        name: srv?.name,
+        ip: srv?.ip,
+        sudoer: srv?.sudoer,
+        identity: "~/.ssh/once_compute",
+      },
+    },
+  ];
+  return scaffold(opts, specs);
+};
+
+// ansible-remote configures the BOX: the playbook (Docker + ONCE + sites).
+const ansibleRemoteStep: StepFn = (opts) => {
+  const specs = [
+    {
+      template: { name: "once/playbook.yml", content: playbookYml },
+      target: `${workdir(opts)}/ansible-remote/playbook.yml`,
+      data: {
+        host: opts["once/server"],
+        smtp: opts["once/smtp"],
+        websites: opts["once/website"],
+        deploy_key: opts["once/ssh"]?.deploy,
+      },
+    },
+  ];
+  return scaffold(opts, specs);
+};
+
+// --- wiring ----------------------------------------------------------------------------
+
+const wireFn = (step: string) => {
+  switch (step) {
+    case "once/start":
+      return [startStep, "once/compute", "once/smtp"] as const;
+    case "once/compute":
+      return [computeStep, "once/dns"] as const;
+    case "once/smtp":
+      return [smtpStep, "once/dns"] as const;
+    case "once/dns":
+      return [dnsStep, "once/smtp-post"] as const;
+    case "once/smtp-post":
+      return [smtpPostStep, "once/ansible-local", "once/ansible-remote"] as const;
+    case "once/ansible-local":
+      return [ansibleLocalStep] as const;
+    case "once/ansible-remote":
+      return [ansibleRemoteStep] as const;
+  }
+};
+
+export function onceWf() {
+  let wf = workflow({ start: "once/start", wireFn });
+  // provider swap (headline): compute's HCL is chosen by advice.
+  //   swap to Oracle Cloud by re-adding under the same "once/provider" id:
+  //     adviceAdd(wf, "once/compute", "before", "once/provider", ociProvider)
+  wf = adviceAdd(wf, "once/compute", "before", "once/provider", digitaloceanProvider);
+  // backend as advice: one isolated tofu state per tofu step. Local here;
+  // for s3, isolate by a per-step key derived from the same dir, e.g.
+  //   tofu.s3BackendAdvice(serverDir, () => ({bucket: "once-tfstate",
+  //     key: "once/server/terraform.tfstate", region: "eu-west-1"}))
+  wf = adviceAdd(wf, "once/compute", "before", "once/backend", tofu.localBackendAdvice(serverDir));
+  wf = adviceAdd(wf, "once/smtp", "before", "once/backend", tofu.localBackendAdvice(smtpDir));
+  wf = adviceAdd(wf, "once/dns", "before", "once/backend", tofu.localBackendAdvice(dnsDir));
+  wf = adviceAdd(wf, "once/smtp-post", "before", "once/backend", tofu.localBackendAdvice(smtpPostDir));
+  // ./red create --dry-run prints what would run instead of running it
+  return dryRun.advise(wf, [
+    "once/compute",
+    "once/smtp",
+    "once/dns",
+    "once/smtp-post",
+    "once/ansible-local",
+    "once/ansible-remote",
+  ]);
+}
+
+const wf = onceWf();
+
+const fileArg = (a: string) => a === "-f" || a === "--file" || a.startsWith("--file=");
+
+const defaultArgs = (args: string[]) =>
+  args.some(fileArg) ? args : [...args, "-f", `${scriptDir}/red.yml`];
+
+// REPL/test-friendly entrypoint: resolves without calling process.exit.
+export const run = (...args: string[]) => runCli(wf, defaultArgs(args));
+
+if (import.meta.main) {
+  await execCli(wf, defaultArgs(Bun.argv.slice(2)));
+}

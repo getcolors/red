@@ -1,0 +1,103 @@
+#!/usr/bin/env bun
+// Self-contained red CLI for a fake ZooKeeper cluster.
+// Run from this directory:   ./red create   |   ./red delete
+//
+// In-repo example: red is imported by relative path (the :local/root
+// equivalent) and the templates travel as text imports — the module graph
+// is the classpath. An external consumer would import from "red@x.y.z"
+// (version-pinned; Bun auto-install resolves it without a package.json).
+
+import mainTf from "./resources/zk/main.tf" with { type: "text" };
+import zooCfg from "./resources/zk/zoo.cfg" with { type: "text" };
+import { execCli, runCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import { scaffold } from "../../src/scaffold.ts";
+import * as tofu from "../../src/tofu.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { adviceAdd, workflow } from "../../src/workflow.ts";
+
+const scriptDir = import.meta.dir;
+
+const examplePath = (p?: string) =>
+  p === undefined ? undefined : p.startsWith("/") ? p : `${scriptDir}/${p}`;
+
+const workdir = (opts: Opts) => examplePath(opts["zk/workdir"]);
+
+const nodeDir = (opts: Opts, node: { id: number }) =>
+  `${workdir(opts)}/nodes/${node.id}`;
+
+const startStep: StepFn = (opts) => opts;
+
+const nodeStep: StepFn = async (opts) => {
+  const node = opts["zk/node"];
+  const dir = nodeDir(opts, node);
+  const specs = [
+    {
+      template: { name: "zk/main.tf", content: mainTf },
+      target: `${dir}/main.tf`,
+      data: { node },
+    },
+  ];
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir });
+    return (out["red/exit"] ?? 0) > 0 ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir });
+};
+
+const zooCfgStep: StepFn = (opts) => {
+  const nodes = opts["zk/servers"];
+  const servers =
+    opts["red/event"] === "delete"
+      ? nodes
+      : opts["red/branches"]
+          .map((b: Opts) => b["tofu/outputs"])
+          .sort((a: { id: number }, b: { id: number }) => a.id - b.id);
+  const specs = nodes.map((n: { id: number }) => ({
+    template: { name: "zk/zoo.cfg", content: zooCfg },
+    target: `${workdir(opts)}/nodes/${n.id}/zoo.cfg`,
+    data: { servers },
+  }));
+  return scaffold(opts, specs);
+};
+
+const wireFn = (step: string) => {
+  switch (step) {
+    case "zk/start":
+      return [startStep, "zk/node"] as const;
+    case "zk/node":
+      return [nodeStep, "zk/zoo-cfg"] as const;
+    case "zk/zoo-cfg":
+      return [zooCfgStep] as const;
+  }
+};
+
+const nextFn = (step: string, defaultNext: string[] | null, opts: Opts) => {
+  if ((opts["red/exit"] ?? 0) > 0) return [];
+  if (step === "zk/start") {
+    return opts["zk/servers"].map(
+      (n: unknown) => ["zk/node", { ...opts, "zk/node": n }] as const,
+    );
+  }
+  return (defaultNext ?? []).map((s) => [s, opts] as const);
+};
+
+let wf = workflow({ start: "zk/start", wireFn, nextFn });
+// the backend is not hardwired: the local filesystem backend is injected
+// with the advice facility
+wf = adviceAdd(wf, "zk/node", "before", "example/backend",
+  tofu.localBackendAdvice((o) => nodeDir(o, o["zk/node"])));
+// ./red create --dry-run prints what would run instead of running it
+wf = dryRun.advise(wf, ["zk/node", "zk/zoo-cfg"]);
+
+const fileArg = (a: string) => a === "-f" || a === "--file" || a.startsWith("--file=");
+
+const defaultArgs = (args: string[]) =>
+  args.some(fileArg) ? args : [...args, "-f", `${scriptDir}/red.yml`];
+
+// REPL/test-friendly entrypoint: resolves without calling process.exit.
+export const run = (...args: string[]) => runCli(wf, defaultArgs(args));
+
+if (import.meta.main) {
+  await execCli(wf, defaultArgs(Bun.argv.slice(2)));
+}

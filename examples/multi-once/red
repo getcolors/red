@@ -1,0 +1,344 @@
+#!/usr/bin/env bun
+// Several fake ONCE boxes from ONE once workflow, composed with wf `step` —
+// the multi-zookeeper idiom applied to the once example. Run from here:
+//   ./red create --dry-run   |   ./red create   |   ./red delete
+//
+// Per-deployment graph (one once-wf run per once/deployments entry):
+//   compute -+                              +-> ansible-local  (~/.ssh/config)
+//            +-> dns -> smtp-post ----------+
+//   smtp ----+                              +-> ansible-remote (playbook)
+//
+// Higher-level graph (the composition layer):
+//   start -> deployment(once-wf) x N -> report
+//
+// Two things the parent swaps on the embedded steps, both the "re-add under
+// the same id" idiom (like multi-zookeeper swapping a child's backend):
+//   "once/provider"  digitalocean (child default) -> DATA-DRIVEN per
+//                    deployment (eu -> digitalocean, us -> oci), read from
+//                    the per-deployment "once/provider" value.
+//   "once/backend"   local (child default) -> S3, isolated by a
+//                    per-deployment + per-step key, so no two of the
+//                    2xN=8 tofu states collide.
+//
+// NOTE: the S3 backend is DEMONSTRATION-ONLY. `./red create` needs a real
+// bucket + AWS credentials and will not run offline. The offline path is
+// `./red create --dry-run`: the parent's dry-run advice is outermost, so it
+// skips each tofu step AND its `before` provider/backend advice — touching
+// nothing (no main.tf, no backend.tf, no S3).
+
+import cloudflareTf from "./resources/once/cloudflare/main.tf" with { type: "text" };
+import doTf from "./resources/once/do/main.tf" with { type: "text" };
+import ociTf from "./resources/once/oci/main.tf" with { type: "text" };
+import playbookYml from "./resources/once/playbook.yml" with { type: "text" };
+import smtpPostTf from "./resources/once/smtp-post/main.tf" with { type: "text" };
+import smtpTf from "./resources/once/smtp/main.tf" with { type: "text" };
+import sshConfig from "./resources/once/ssh-config" with { type: "text" };
+import { execCli, runCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import { runtime } from "../../src/runtime.ts";
+import { renderTemplate, scaffold, type Template } from "../../src/scaffold.ts";
+import * as tofu from "../../src/tofu.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { adviceAdd, step, workflow } from "../../src/workflow.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+
+const scriptDir = import.meta.dir;
+
+// --- paths: one isolated tofu working dir per step, under work/<deployment> --
+// The parent's `in` sets once/workdir to work/<name>, so serverDir becomes
+// work/eu/server, work/us/server, ... — deployments never share a dir.
+
+const examplePath = (p?: string) =>
+  p === undefined ? undefined : p.startsWith("/") ? p : `${scriptDir}/${p}`;
+
+const workdir = (opts: Opts) => examplePath(opts["once/workdir"]);
+const stepDir = (opts: Opts, nm: string) => `${workdir(opts)}/${nm}`;
+const serverDir = (opts: Opts) => stepDir(opts, "server");
+const smtpDir = (opts: Opts) => stepDir(opts, "smtp");
+const dnsDir = (opts: Opts) => stepDir(opts, "dns");
+const smtpPostDir = (opts: Opts) => stepDir(opts, "smtp-post");
+
+// --- domain discovery from once/website ---------------------------------------
+
+const apex = (hostname: string) => hostname.split(".").slice(-2).join(".");
+
+const sendingDomain = (opts: Opts) =>
+  `notifications.${apex(opts["once/website"][0].hostname)}`;
+
+// --- provider-swap advice (headline), now data-driven per deployment ----------
+// Same backend-as-advice idiom: a `before` advice that scaffolds the
+// provider-specific main.tf before `compute` runs. In multi-once the choice
+// is per-deployment DATA: the advice reads "once/provider" (set by the parent
+// `in` from each deployment) and picks the matching mock. The advice is
+// uniform across branches; the data differs — downstream steps still never
+// learn which cloud produced the host.
+
+const providerTemplates: Record<string, Template> = {
+  digitalocean: { name: "once/do/main.tf", content: doTf },
+  oci: { name: "once/oci/main.tf", content: ociTf },
+};
+
+const providerAdvice = (dirFn: (opts: Opts) => string) => (opts: Opts): Opts => {
+  const tmpl = providerTemplates[opts["once/provider"]] ?? providerTemplates.digitalocean!;
+  const dir = dirFn(opts);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    `${dir}/main.tf`,
+    renderTemplate(tmpl, { host: opts["once/host"], ssh: opts["once/ssh"] }),
+  );
+  return opts;
+};
+
+// --- S3 backend config (demonstration-only) ------------------------------------
+// The bucket is shared, so isolation MUST come from a distinct key. We derive
+// it from BOTH the deployment name ("once/deployment") and the step's dir
+// segment, e.g. once/eu/server/…, once/us/smtp/… — 2 deployments x 4 tofu
+// steps = 8 separate state objects, none clobbering another. Swap to gcs by
+// re-adding "once/backend" with gcsBackendAdvice and a per-step prefix.
+
+const s3Config = (dirFn: (opts: Opts) => string) => (opts: Opts) => ({
+  bucket: "once-tfstate", // placeholder — needs a real bucket
+  key: `once/${opts["once/deployment"]}/${dirFn(opts).split("/").pop()}/terraform.tfstate`,
+  region: "eu-west-1",
+});
+
+// --- tofu steps -------------------------------------------------------------------
+
+const startStep: StepFn = (opts) => opts;
+
+// compute is a bare tofu run: its main.tf is written by the "once/provider"
+// advice and its backend.tf by the "once/backend" advice, both `before`.
+const computeStep: StepFn = (opts) => tofu.tofuStep(opts, { dir: serverDir(opts) });
+
+// Scaffold main.tf then apply (create); or destroy then remove main.tf
+// (delete). The zookeeper node-step pattern.
+async function tofuWithSpec(
+  opts: Opts,
+  dir: string,
+  specs: Parameters<typeof scaffold>[1],
+): Promise<Opts> {
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir });
+    return (out["red/exit"] ?? 0) > 0 ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir });
+}
+
+const smtpStep: StepFn = (opts) => {
+  const dir = smtpDir(opts);
+  const specs = [
+    {
+      template: { name: "once/smtp/main.tf", content: smtpTf },
+      target: `${dir}/main.tf`,
+      data: {
+        subdomain: sendingDomain(opts),
+        id: `snd-${apex(opts["once/website"][0].hostname).replaceAll(".", "-")}`,
+        username: "resend",
+        password: "mock-smtp-secret",
+      },
+    },
+  ];
+  return tofuWithSpec(opts, dir, specs);
+};
+
+// dns joins compute and smtp: it needs compute's ip and smtp's records. It
+// also carries the two provisioning outputs forward (once/server, once/smtp)
+// so smtp-post and the ansible steps can read them without red/branches.
+const dnsStep: StepFn = (opts) => {
+  const dir = dnsDir(opts);
+  const outs = opts["red/branches"].map((b: Opts) => b["tofu/outputs"]);
+  const computeOut = outs.find((o: Opts) => o?.ip);
+  const smtpOut = outs.find((o: Opts) => o?.records);
+  const specs = [
+    {
+      template: { name: "once/cloudflare/main.tf", content: cloudflareTf },
+      target: `${dir}/main.tf`,
+      data: {
+        ip: computeOut?.ip,
+        hostnames: opts["once/website"].map((w: { hostname: string }) => w.hostname),
+        email: smtpOut?.records,
+      },
+    },
+  ];
+  return tofuWithSpec(
+    { ...opts, "once/server": computeOut, "once/smtp": smtpOut },
+    dir,
+    specs,
+  );
+};
+
+const smtpPostStep: StepFn = (opts) => {
+  const dir = smtpPostDir(opts);
+  const specs = [
+    {
+      template: { name: "once/smtp-post/main.tf", content: smtpPostTf },
+      target: `${dir}/main.tf`,
+      data: { id: opts["once/smtp"]?.id, subdomain: sendingDomain(opts) },
+    },
+  ];
+  return tofuWithSpec(opts, dir, specs);
+};
+
+// --- scaffold-only steps (no command) ----------------------------------------------
+
+const ansibleLocalStep: StepFn = (opts) => {
+  const srv = opts["once/server"];
+  const specs = [
+    {
+      template: { name: "once/ssh-config", content: sshConfig },
+      target: `${workdir(opts)}/ansible-local/config`,
+      data: {
+        name: srv?.name,
+        ip: srv?.ip,
+        sudoer: srv?.sudoer,
+        identity: "~/.ssh/once_compute",
+      },
+    },
+  ];
+  return scaffold(opts, specs);
+};
+
+const ansibleRemoteStep: StepFn = (opts) => {
+  const specs = [
+    {
+      template: { name: "once/playbook.yml", content: playbookYml },
+      target: `${workdir(opts)}/ansible-remote/playbook.yml`,
+      data: {
+        host: opts["once/server"],
+        smtp: opts["once/smtp"],
+        websites: opts["once/website"],
+        deploy_key: opts["once/ssh"]?.deploy,
+      },
+    },
+  ];
+  return scaffold(opts, specs);
+};
+
+// --- the single-VPS once workflow (same shape as examples/once) ---------------
+// Ships digitalocean provider + local backend as its defaults, so it runs
+// standalone. The composition layer below re-adds "once/provider" and
+// "once/backend" to swap both — exactly how multi-zookeeper's parent can
+// replace clusterWf's default backend.
+
+const onceWireFn = (s: string) => {
+  switch (s) {
+    case "once/start":
+      return [startStep, "once/compute", "once/smtp"] as const;
+    case "once/compute":
+      return [computeStep, "once/dns"] as const;
+    case "once/smtp":
+      return [smtpStep, "once/dns"] as const;
+    case "once/dns":
+      return [dnsStep, "once/smtp-post"] as const;
+    case "once/smtp-post":
+      return [smtpPostStep, "once/ansible-local", "once/ansible-remote"] as const;
+    case "once/ansible-local":
+      return [ansibleLocalStep] as const;
+    case "once/ansible-remote":
+      return [ansibleRemoteStep] as const;
+  }
+};
+
+let onceWf = workflow({ start: "once/start", wireFn: onceWireFn });
+onceWf = adviceAdd(onceWf, "once/compute", "before", "once/provider", providerAdvice(serverDir));
+onceWf = adviceAdd(onceWf, "once/compute", "before", "once/backend", tofu.localBackendAdvice(serverDir));
+onceWf = adviceAdd(onceWf, "once/smtp", "before", "once/backend", tofu.localBackendAdvice(smtpDir));
+onceWf = adviceAdd(onceWf, "once/dns", "before", "once/backend", tofu.localBackendAdvice(dnsDir));
+onceWf = adviceAdd(onceWf, "once/smtp-post", "before", "once/backend", tofu.localBackendAdvice(smtpPostDir));
+
+// --- the composition layer: one once-wf run per deployment ---------------------
+
+const deploymentsWireFn = (s: string) => {
+  switch (s) {
+    case "multi/start":
+      return [startStep, "multi/deployment"] as const;
+    case "multi/deployment":
+      return [
+        step(onceWf, {
+          in: (opts) => {
+            const d = opts["multi/deployment"];
+            // carry ambient keys by spreading opts (keeps red/event,
+            // red/dry-run, inherited advice), then project this deployment's
+            // fields into the once keys
+            return {
+              ...opts,
+              "once/deployment": d.name, // -> S3 key + report
+              "once/provider": d.provider, // -> "once/provider" advice
+              "once/host": d.host,
+              "once/ssh": d.ssh,
+              "once/website": d.website,
+              "once/workdir": `${opts["once/workdir"]}/${d.name}`,
+            };
+          },
+        }),
+        "multi/report",
+      ] as const;
+    case "multi/report":
+      return [
+        (opts: Opts) => {
+          for (const b of opts["red/branches"]) {
+            runtime.log(
+              "deployment ready:",
+              b["once/deployment"],
+              "->",
+              b["once/workdir"],
+              `(${b["once/provider"]})`,
+            );
+          }
+          return opts;
+        },
+      ] as const;
+  }
+};
+
+const deploymentsNextFn = (s: string, defaultNext: string[] | null, opts: Opts) => {
+  if ((opts["red/exit"] ?? 0) > 0) return [];
+  if (s === "multi/start") {
+    return opts["once/deployments"].map(
+      (d: unknown) => ["multi/deployment", { ...opts, "multi/deployment": d }] as const,
+    );
+  }
+  return (defaultNext ?? []).map((n) => [n, opts] as const);
+};
+
+let wf = workflow({
+  start: "multi/start",
+  wireFn: deploymentsWireFn,
+  nextFn: deploymentsNextFn,
+});
+// provider swap (headline): replace the child's digitalocean default with a
+// data-driven pick, so eu -> digitalocean and us -> oci in one run. Same
+// "once/provider" id -> replaces the inherited child advice.
+wf = adviceAdd(wf, "once/compute", "before", "once/provider", providerAdvice(serverDir));
+// backend swap: replace the child's local backend with S3, isolated by a
+// per-deployment + per-step key. Same "once/backend" id -> replaces each
+// child advice; whichever backend is active, the key keeps all 8 states
+// apart. (Demonstration-only: real `create` needs the bucket to exist.)
+wf = adviceAdd(wf, "once/compute", "before", "once/backend", tofu.s3BackendAdvice(serverDir, s3Config(serverDir)));
+wf = adviceAdd(wf, "once/smtp", "before", "once/backend", tofu.s3BackendAdvice(smtpDir, s3Config(smtpDir)));
+wf = adviceAdd(wf, "once/dns", "before", "once/backend", tofu.s3BackendAdvice(dnsDir, s3Config(dnsDir)));
+wf = adviceAdd(wf, "once/smtp-post", "before", "once/backend", tofu.s3BackendAdvice(smtpPostDir, s3Config(smtpPostDir)));
+// dry-run declared LAST at the parent, so "red.dry-run/skip" gets the largest
+// seq and stays OUTERMOST over the re-added `before` provider/backend advice —
+// `./red create --dry-run` then skips them too and touches nothing.
+// Inspect the composed stack with e.g. advicePlan([wf, onceWf], "once/compute")
+wf = dryRun.advise(wf, [
+  "once/compute",
+  "once/smtp",
+  "once/dns",
+  "once/smtp-post",
+  "once/ansible-local",
+  "once/ansible-remote",
+]);
+
+const fileArg = (a: string) => a === "-f" || a === "--file" || a.startsWith("--file=");
+
+const defaultArgs = (args: string[]) =>
+  args.some(fileArg) ? args : [...args, "-f", `${scriptDir}/red.yml`];
+
+// REPL/test-friendly entrypoint: resolves without calling process.exit.
+export const run = (...args: string[]) => runCli(wf, defaultArgs(args));
+
+if (import.meta.main) {
+  await execCli(wf, defaultArgs(Bun.argv.slice(2)));
+}

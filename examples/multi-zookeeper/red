@@ -1,0 +1,162 @@
+#!/usr/bin/env bun
+// Two fake ZooKeeper clusters from ONE cluster workflow, composed with
+// wf `step`. Run from this directory:   ./red create   |   ./red delete
+
+import mainTf from "./resources/zk/main.tf" with { type: "text" };
+import zooCfg from "./resources/zk/zoo.cfg" with { type: "text" };
+import { execCli, runCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import { runtime } from "../../src/runtime.ts";
+import { scaffold } from "../../src/scaffold.ts";
+import * as tofu from "../../src/tofu.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { adviceAdd, step, workflow } from "../../src/workflow.ts";
+
+const scriptDir = import.meta.dir;
+
+// --- the single-cluster workflow (same shape as examples/zookeeper) ----------
+
+const examplePath = (p?: string) =>
+  p === undefined ? undefined : p.startsWith("/") ? p : `${scriptDir}/${p}`;
+
+const workdir = (opts: Opts) => examplePath(opts["zk/workdir"]);
+
+const nodeDir = (opts: Opts, node: { id: number }) =>
+  `${workdir(opts)}/nodes/${node.id}`;
+
+const startStep: StepFn = (opts) => opts;
+
+const nodeStep: StepFn = async (opts) => {
+  const node = opts["zk/node"];
+  const dir = nodeDir(opts, node);
+  const specs = [
+    {
+      template: { name: "zk/main.tf", content: mainTf },
+      target: `${dir}/main.tf`,
+      data: { node },
+    },
+  ];
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir });
+    return (out["red/exit"] ?? 0) > 0 ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir });
+};
+
+const zooCfgStep: StepFn = (opts) => {
+  const nodes = opts["zk/servers"];
+  const servers =
+    opts["red/event"] === "delete"
+      ? nodes
+      : opts["red/branches"]
+          .map((b: Opts) => b["tofu/outputs"])
+          .sort((a: { id: number }, b: { id: number }) => a.id - b.id);
+  const specs = nodes.map((n: { id: number }) => ({
+    template: { name: "zk/zoo.cfg", content: zooCfg },
+    target: `${workdir(opts)}/nodes/${n.id}/zoo.cfg`,
+    data: { servers },
+  }));
+  return scaffold(opts, specs);
+};
+
+const clusterWireFn = (s: string) => {
+  switch (s) {
+    case "zk/start":
+      return [startStep, "zk/node"] as const;
+    case "zk/node":
+      return [nodeStep, "zk/zoo-cfg"] as const;
+    case "zk/zoo-cfg":
+      return [zooCfgStep] as const;
+  }
+};
+
+const clusterNextFn = (s: string, defaultNext: string[] | null, opts: Opts) => {
+  if ((opts["red/exit"] ?? 0) > 0) return [];
+  if (s === "zk/start") {
+    return opts["zk/servers"].map(
+      (n: unknown) => ["zk/node", { ...opts, "zk/node": n }] as const,
+    );
+  }
+  return (defaultNext ?? []).map((n) => [n, opts] as const);
+};
+
+// the child ships its default backend; a parent can replace it by re-adding
+// advice under the same id ("zk/backend"), or redefine zk/node wholesale
+// with an override advice
+const clusterWf = adviceAdd(
+  workflow({ start: "zk/start", wireFn: clusterWireFn, nextFn: clusterNextFn }),
+  "zk/node",
+  "before",
+  "zk/backend",
+  tofu.localBackendAdvice((o) => nodeDir(o, o["zk/node"])),
+);
+
+// --- the higher-level workflow: one clusterWf run per cluster ----------------
+
+const clustersWireFn = (s: string) => {
+  switch (s) {
+    case "clusters/start":
+      return [startStep, "clusters/cluster"] as const;
+    case "clusters/cluster":
+      return [
+        step(clusterWf, {
+          in: (opts) => {
+            const c = opts["zk/cluster"];
+            return {
+              ...opts,
+              "zk/servers": c.servers,
+              "zk/workdir": `${opts["zk/workdir"]}/${c.name}`,
+            };
+          },
+        }),
+        "clusters/report",
+      ] as const;
+    case "clusters/report":
+      return [
+        (opts: Opts) => {
+          for (const b of opts["red/branches"]) {
+            runtime.log("cluster ready:", b["zk/workdir"]);
+          }
+          return opts;
+        },
+      ] as const;
+  }
+};
+
+const clustersNextFn = (s: string, defaultNext: string[] | null, opts: Opts) => {
+  if ((opts["red/exit"] ?? 0) > 0) return [];
+  if (s === "clusters/start") {
+    return opts["zk/clusters"].map(
+      (c: unknown) => ["clusters/cluster", { ...opts, "zk/cluster": c }] as const,
+    );
+  }
+  return (defaultNext ?? []).map((n) => [n, opts] as const);
+};
+
+let wf = workflow({
+  start: "clusters/start",
+  wireFn: clustersWireFn,
+  nextFn: clustersNextFn,
+});
+// cross-workflow advice: zk/node and zk/zoo-cfg live inside the embedded
+// clusterWf, but advice is inherited through `step` — flat step names reach
+// any depth, parent advice is outermost
+wf = adviceAdd(wf, "zk/node", "before", "clusters/audit", (opts: Opts) => {
+  runtime.log("node", opts["zk/node"]?.name, "of cluster", opts["zk/cluster"]?.name);
+  return opts;
+});
+// dry-run for the whole composition, declared once at the top; inspect the
+// resulting stack with e.g. advicePlan([wf, clusterWf], "zk/node")
+wf = dryRun.advise(wf, ["zk/node", "zk/zoo-cfg"]);
+
+const fileArg = (a: string) => a === "-f" || a === "--file" || a.startsWith("--file=");
+
+const defaultArgs = (args: string[]) =>
+  args.some(fileArg) ? args : [...args, "-f", `${scriptDir}/red.yml`];
+
+// REPL/test-friendly entrypoint: resolves without calling process.exit.
+export const run = (...args: string[]) => runCli(wf, defaultArgs(args));
+
+if (import.meta.main) {
+  await execCli(wf, defaultArgs(Bun.argv.slice(2)));
+}
