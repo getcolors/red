@@ -1,167 +1,165 @@
-# green
+# red
 
-A babashka-compatible Clojure library for building idempotent devops CLIs:
-desired state in EDN, workflows as step graphs threaded by one map,
-Selmer-scaffolded configuration files, OpenTofu as the muscle, and Ansible for
-SSH provisioning when you need it.
+`red` is a TypeScript/Bun library for building idempotent devops CLIs:
+desired state in YAML, workflows as step graphs threaded by one plain object,
+Selmer-style template scaffolding, OpenTofu for infrastructure, and Ansible for
+SSH provisioning.
 
-**Docs:** [specification](https://amiorin.github.io/green/) ([repo](index.html)) · [source tour](https://amiorin.github.io/green/docco.html) ([repo](docco.html)).
-
-## The model in one glance
-
-```clojure
-(require '[green.workflow :as wf]
-         '[green.cli :as cli])
-
-(defn wire-fn [step run-opts]           ;; static graph for this run
-  (case step
-    :zk/start   [start-step :zk/node]
-    :zk/node    [node-step  :zk/zoo-cfg]
-    :zk/zoo-cfg [zoo-cfg-step]))
-
-(defn next-fn [step default-next opts]  ;; dynamic router: fan-out, error routing
-  (cond
-    (pos? (:green/exit opts 0)) []
-    (= step :zk/start) (for [n (:zk/servers opts)]
-                         [:zk/node (assoc opts :zk/node n)])
-    :else (map (fn [s] [s opts]) default-next)))
-
-(def workflow
-  (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn}))
-
-(cli/exec workflow)                     ;; ./green create | ./green delete
-```
-
-- A **step** is a function `opts -> opts`, named by a qualified keyword.
-- Outcomes are Unix-style: `:green/exit` (0 ok), `:green/err`,
-  `:green/trace`. Thrown exceptions and non-map step returns are converted to
-  that contract. The engine stamps `:green/step` before each step runs.
-- `wire-fn` is called as `(wire-fn step run-opts)`, where `run-opts` is the
-  initial opts for this run. It may switch the static graph on stable inputs
-  such as `:green/event`; step-result-dependent routing belongs in `next-fn`.
-- Multiple successors run in **parallel** using `future`s. Branches converging
-  on a step **join** it once with branch results under `:green/branches`. If a
-  branch fails inside a fork, running siblings finish their current step, the
-  join is skipped, and the worst exit propagates.
-- **Advice** is Emacs `nadvice`-style, workflow-scoped, and pure:
-  `wf/advice-add` targets one step and `wf/advice-add-all` targets every step.
-  Supported `how` values are `:around`, `:override`, `:before`, `:after`,
-  `:before-while`, `:before-until`, `:after-while`, `:after-until`,
-  `:filter-args`, and `:filter-return`. At equal `:depth`, newest advice is
-  outermost; lower `:depth` runs farther outside.
-- **Composition:** `(wf/step sub-workflow {:in … :out …})` turns a workflow
-  into an ordinary step — wire it, advise it, and fan it out. Parent advice is
-  inherited by embedded workflows; same step names match flat at any depth, and
-  a parent advice entry with the same id replaces the child's entry.
-  `wf/advice-plan` shows the composed stack.
-- `green.scaffold/scaffold` renders flat Selmer file specs on create; on
-  `:delete` the same specs name targets to remove, pruning immediate empty
-  parent directories.
-- `green.tofu/tofu-step` runs `tofu init` + `apply` for any non-`:delete`
-  event and `init` + `destroy` for `:delete`. Apply outputs land under
-  `:tofu/outputs` by default. Backends are explicit `:before` advices:
-  `backend-advice`, `local-backend-advice`, `s3-backend-advice`, and
-  `gcs-backend-advice`.
-- `green.ansible/ansible-step` runs `ansible-playbook` event-aware
-  (`create.yml` for non-delete, `delete.yml` for delete), parses PLAY RECAP
-  under `:ansible/recap`, and pairs with `inventory-advice` for generated INI
-  inventories.
-- `green.dry-run/advise` + `--dry-run` skips the named side-effecting steps and
-  prints what would run. `green.progress/advise` adds all-step timing output.
-
-## Scheduler algorithm in plain English
-
-The scheduler is a small fork/join workflow runner:
-
-1. Start with one live task: the workflow's `:start` step and the initial opts.
-2. Keep two piles: `live` branches still running and `finished` terminal
-   branches.
-3. Group live branches by step. Multiple branches waiting at the same step may
-   need to join.
-4. A step is ready only when no other live branch can still statically reach
-   that same step through this run's `wire-fn` edges. This lets longer branches
-   arrive at a join before the join runs.
-5. Ready work runs concurrently in `future`s.
-6. After a step, zero next pairs terminates, one continues, several fork.
-7. Branches from different origins at the same step join: the join step runs
-   once from the fork-point opts with `:green/branches` attached.
-8. A failed fork collapses: siblings finish their current step, no new fork work
-   starts, the join is skipped, and the result carries the worst exit plus all
-   branch results.
-9. When no live branches remain, the final result is the single terminal opts;
-   with multiple terminals, the first failure wins, otherwise the last success.
+The full behavioral contract is in [`SPEC.md`](SPEC.md).
 
 ## Install
 
-`green` has not been published to Clojars yet. Use a git dependency with an
-explicit commit SHA:
+For development in this repository:
 
-```clojure
-io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}
+```sh
+bun install
 ```
 
-In-repo examples use `:local/root "../.."` for development. Publishing for a
-future Clojars release: `clojure -T:build jar` (or `install` / `deploy`; deploy
-reads `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`). Do not recommend `:mvn/version`
-for consumers until a Clojars release exists.
+For consumers, use a version-pinned package once `red` is published to npm:
 
-## Try it
+```ts
+import { workflow, execCli } from "red@x.y.z";
+```
 
-Each example's `./green` is a self-contained babashka script. Mock examples use
-OpenTofu configs made only of `locals`/`output` blocks, so non-dry-run paths
-need `tofu` on `PATH` but create no real infrastructure.
+Until an npm release exists, use a minimal `package.json` with a pinned git
+dependency and import from `red` there. Do not use an unpinned specifier.
 
-- `examples/zookeeper` — dynamic fan-out/join, scaffold + tofu,
-  backend-as-advice, dry-run.
-- `examples/multi-zookeeper` — two clusters from one workflow via `wf/step`;
-  parent advice reaches embedded steps.
-- `examples/once` — a Basecamp ONCE-style single-VPS PaaS: provider-swap
-  advice, `compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`,
-  threaded opts, per-step tofu state, and scaffold-only Ansible config. See
-  `examples/once/SPEC.md`.
-- `examples/multi-once` — many ONCE boxes from one `once-wf`; the parent swaps
-  inherited `::provider` and `::backend` advice, using S3 state keys isolated by
-  deployment and step. S3 is demonstration-only; `create` needs a real bucket.
-- `examples/floci-zookeeper` — the real example: OpenTofu's AWS provider talks
-  to floci on `localhost:4566`, creating Docker-backed EC2 instances, then
-  `green.ansible` provisions a real ZooKeeper ensemble over SSH and a health
-  step verifies quorum. Linux-only at runtime; `--dry-run` works offline.
+## Commands
+
+```sh
+bun test              # run the TypeScript test suite
+bun run typecheck     # run tsc --noEmit
+```
+
+The end-to-end ZooKeeper tests use real `tofu` over locals/outputs-only HCL and
+skip automatically when `tofu` is not on `PATH`.
+
+## The model in one glance
+
+```ts
+import { execCli, type Opts, workflow } from "red";
+
+const mark = (name: string) => (opts: Opts) => ({
+  ...opts,
+  seen: [...(opts.seen ?? []), name],
+});
+
+const wireFn = (step: string, runOpts: Opts) => {
+  switch (step) {
+    case "zk/start":
+      return [mark("start"), "zk/node"] as const;
+    case "zk/node":
+      return [mark("node"), "zk/join"] as const;
+    case "zk/join":
+      return [mark("join")] as const;
+  }
+};
+
+const nextFn = (step: string, defaultNext: string[] | null, opts: Opts) => {
+  if ((opts["red/exit"] ?? 0) > 0) return [];
+  if (step === "zk/start") {
+    return opts["zk/servers"].map((server: unknown) => [
+      "zk/node",
+      { ...opts, "zk/node": server },
+    ] as const);
+  }
+  return (defaultNext ?? []).map((s) => [s, opts] as const);
+};
+
+const wf = workflow({ start: "zk/start", wireFn, nextFn });
+
+if (import.meta.main) {
+  await execCli(wf);
+}
+```
+
+Run a project launcher as:
+
+```sh
+./red create -f red.yml
+./red delete -f red.yml
+./red create --dry-run
+```
+
+## Core concepts
+
+- **Opts** are one open plain object threaded through every step. Engine keys
+  live under `red/*` (`"red/exit"`, `"red/err"`, `"red/event"`,
+  `"red/branches"`, ...); project data should use its own namespace-like
+  string keys (`"zk/servers"`, `"once/workdir"`, ...).
+- A **step** is `(opts) => opts | Promise<opts>`. The engine deep-freezes step
+  input, catches thrown errors, rejects non-plain-object returns, and stamps a
+  default `"red/exit": 0` on success.
+- A **workflow** is a static `wireFn` graph plus an optional dynamic `nextFn`.
+  Independent successors run concurrently; converging branches join once with
+  branch results under `"red/branches"`; failed forks collapse cleanly.
+- **Advice** is Emacs `nadvice`-style and workflow-scoped: `around`, `before`,
+  `after`, `override`, while/until variants, `filter-args`, and
+  `filter-return`. Advice can target one step or all steps, has deterministic
+  depth/add-order stacking, and is inherited through embedded workflows.
+- **Composition** uses `step(subWorkflow, { in, out })` to turn a workflow into
+  an ordinary step.
+- **Scaffolding** renders text-imported templates with a small internal
+  Selmer-compatible renderer. A file spec is `{template: {name, content},
+  target, data, opts?}`; on `"delete"` the same spec removes the rendered
+  target and prunes empty parent directories.
+- **OpenTofu and Ansible** integrations are event-aware steps. Backend files
+  and inventories are attached as `before` advice instead of being hardwired.
+- **Dry-run and progress** are advice layers, not engine features.
+
+## Modules
+
+```ts
+import { workflow, run, step, adviceAdd } from "red/workflow";
+import * as tofu from "red/tofu";
+import * as ansible from "red/ansible";
+import { scaffold } from "red/scaffold";
+import * as dryRun from "red/dry-run";
+import * as progress from "red/progress";
+import { runCli, execCli } from "red/cli";
+import { schemaGate } from "red/gates";
+import { runtime } from "red/runtime";
+```
+
+The root export (`red`) re-exports the public API and namespaces.
+
+## Examples
+
+Each example's `./red` is a self-contained Bun script that imports this library
+by relative path and uses text imports for templates.
 
 ```sh
 cd examples/zookeeper
-./green create --dry-run
-./green create
-./green delete
+./red create --dry-run
+./red create
+./red delete
 
 cd ../multi-zookeeper
-./green create --dry-run
-./green create
-./green delete
+./red create --dry-run
+./red create
+./red delete
 
 cd ../once
-./green create --dry-run
-./green create
-./green delete
+./red create --dry-run
+./red create
+./red delete
 
 cd ../multi-once
-./green create --dry-run   # offline path; real create needs an S3 bucket
-./green create
-./green delete
-
-cd ../floci-zookeeper
-./green create --dry-run   # validates and prints; touches nothing
-./green create             # real local cluster on floci + Ansible
-./green delete             # Ansible delete.yml first, then tofu destroys
+./red create --dry-run   # offline path; real create needs an S3 bucket
+./red create
+./red delete
 ```
 
-## Tests
+## Desired state YAML
 
-```sh
-bb test             # under babashka
-clojure -X:test     # under the JVM
+`runCli` loads `red.yml` by default, stamps `"red/event"`, and runs the
+workflow. Namespaced string keys can be unquoted in Bun YAML:
+
+```yaml
+zk/workdir: work
+zk/servers:
+  - {id: 1, name: zk1, ip: 10.0.0.1}
 ```
 
-`test/green/zookeeper_test.clj` drives real `tofu` when it is on `PATH` over
-resource-free HCL. `test/green/tofu_test.clj` and
-`test/green/ansible_test.clj` cover backend/inventory/playbook helpers without
-invoking `tofu` or `ansible-playbook`.
+Quote version-like values such as `"3.10"`; YAML would otherwise parse them as
+numbers.

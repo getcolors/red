@@ -5,8 +5,8 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ansibleCfg from "../test-resources/greentest/ansible.cfg" with { type: "text" };
-import createYml from "../test-resources/greentest/create.yml" with { type: "text" };
+import ansibleCfg from "../test-resources/redtest/ansible.cfg" with { type: "text" };
+import createYml from "../test-resources/redtest/create.yml" with { type: "text" };
 import {
   ansibleWithSpec,
   inventoryAdvice,
@@ -50,8 +50,8 @@ test("inventory-ini renders groups, hosts, and vars", () => {
     inventoryIni({
       zookeeper: {
         hosts: [
+          { name: "zk2", vars: { zk_id: 2, ansible_host: "10.0.0.2" } },
           { name: "zk1", vars: { ansible_host: "10.0.0.1", zk_id: 1 } },
-          { name: "zk2", vars: { ansible_host: "10.0.0.2", zk_id: 2 } },
         ],
         vars: { ansible_user: "root", ansible_python_interpreter: "/usr/bin/python3" },
       },
@@ -110,12 +110,12 @@ function stubAnsibleExec(): string[][] {
 
 const specs = (dir: string) => [
   {
-    template: { name: "greentest/create.yml", content: createYml },
+    template: { name: "redtest/create.yml", content: createYml },
     target: `${dir}/create.yml`,
     data: { group: "web", name: "test" },
   },
   {
-    template: { name: "greentest/ansible.cfg", content: ansibleCfg },
+    template: { name: "redtest/ansible.cfg", content: ansibleCfg },
     target: `${dir}/ansible.cfg`,
     data: { inventory: "inventory.ini", host_key_checking: "False" },
   },

@@ -3,9 +3,9 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // the module graph is the classpath: templates travel as text imports
-import ansibleHello from "../test-resources/greentest/ansible-hello.yml" with { type: "text" };
-import hello from "../test-resources/greentest/hello.txt" with { type: "text" };
-import { scaffold } from "../src/scaffold.ts";
+import ansibleHello from "../test-resources/redtest/ansible-hello.yml" with { type: "text" };
+import hello from "../test-resources/redtest/hello.txt" with { type: "text" };
+import { renderTemplate, scaffold } from "../src/scaffold.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "red-scaffold-"));
 
@@ -13,7 +13,7 @@ test("scaffold create and delete", () => {
   const dir = tmp();
   const specs = [
     {
-      template: { name: "greentest/hello.txt", content: hello },
+      template: { name: "redtest/hello.txt", content: hello },
       target: `${dir}/{{who}}/hello.txt`,
       data: { who: "world", name: "red" },
     },
@@ -39,7 +39,7 @@ test("custom delimiters pass Jinja2 through", () => {
   const dir = tmp();
   const specs = [
     {
-      template: { name: "greentest/ansible-hello.yml", content: ansibleHello },
+      template: { name: "redtest/ansible-hello.yml", content: ansibleHello },
       target: `${dir}/play.yml`,
       data: { group: "web" },
       opts: { tagOpen: "<", tagClose: ">", filterOpen: "{", filterClose: "}" },
@@ -48,10 +48,29 @@ test("custom delimiters pass Jinja2 through", () => {
   const created = scaffold({ "red/event": "create" }, specs);
   expect(created["red/exit"]).toBe(0);
   const content = readFileSync(`${dir}/play.yml`, "utf8");
-  // Selmer <{group}> is rendered
+  // Selmer-style <{group}> is rendered
   expect(content).toMatch(/hosts: web/);
   // Jinja2 {{ }} passes through unchanged
   expect(content).toMatch(/\{\{ ansible_var \}\}/);
+});
+
+test("renderer supports escaping, safe, loops, sort, and missing values", () => {
+  const template = {
+    name: "inline",
+    content:
+      "{{missing}}" +
+      "{{unsafe}}|{{unsafe|safe}}\n" +
+      "{% for s in servers | sort(attribute='id') %}{{s.id}}={{s.name}};{% endfor %}",
+  };
+  expect(
+    renderTemplate(template, {
+      unsafe: "<tag>&",
+      servers: [
+        { id: 2, name: "b" },
+        { id: 1, name: "a" },
+      ],
+    }),
+  ).toBe("&lt;tag&gt;&amp;|<tag>&\n1=a;2=b;");
 });
 
 test("a template without content throws with context", () => {

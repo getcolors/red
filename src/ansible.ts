@@ -152,7 +152,8 @@ function hostLine(host: InventoryHost): string {
 }
 
 function groupSection([group, { hosts, vars }]: [string, InventoryGroup]): string {
-  const lines = `[${group}]\n${hosts.map((h) => `${hostLine(h)}\n`).join("")}`;
+  const hostEntries = [...hosts].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const lines = `[${group}]\n${hostEntries.map((h) => `${hostLine(h)}\n`).join("")}`;
   const varEntries = iniVars(vars);
   if (varEntries.length === 0) return lines;
   return `${lines}\n[${group}:vars]\n${varEntries.map((v) => `${v}\n`).join("")}`;
@@ -161,7 +162,7 @@ function groupSection([group, { hosts, vars }]: [string, InventoryGroup]): strin
 // Render an Ansible INI inventory from
 // {group: {hosts: [{name: "zk1", vars: {ansible_host: "172.17.0.3"}}, ...],
 //          vars: {ansible_user: "root"}}}.
-// Groups and vars are emitted in sorted order for deterministic output.
+// Groups, hosts, and vars are emitted in sorted order for deterministic output.
 export function inventoryIni(groups: Record<string, InventoryGroup>): string {
   return Object.entries(groups)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

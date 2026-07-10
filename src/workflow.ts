@@ -316,7 +316,9 @@ function withDefaultExit(opts: Opts): Opts {
 }
 
 function isPlainMap(x: unknown): x is Opts {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
+  const proto = Object.getPrototypeOf(x);
+  return proto === Object.prototype || proto === null;
 }
 
 function inheritedPayload(wf: Workflow): InheritedPayload {

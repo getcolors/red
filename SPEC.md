@@ -1,15 +1,14 @@
 # red — specification
 
-`red` is the TypeScript/Bun port of `green` (the babashka-compatible Clojure
-library in `src/green/`). Same design, same semantics, new runtime: a library
-for building idempotent devops CLIs — desired state in YAML, workflows as step
-graphs threaded by a plain object, template-scaffolded config files, OpenTofu
-and Ansible as the muscle.
+`red` is the TypeScript/Bun implementation of the green workflow model: a
+library for building idempotent devops CLIs — desired state in YAML, workflows
+as step graphs threaded by a plain object, template-scaffolded config files,
+OpenTofu and Ansible as the muscle.
 
-The port is **behavioral**: the Clojure test suite defines the contract, and
-`test/*.test.ts` is its translation. Conventions stay structurally identical
-to green's — a green project ports to red by mechanical rename. The Clojure
-source stays in-tree as the reference implementation.
+The port is **behavioral**: the TypeScript test suite defines the contract.
+Conventions stay structurally identical to green's — a green project ports to
+red by mechanical rename — but this repository now contains only red's
+TypeScript/Bun implementation.
 
 ## Naming
 
@@ -64,7 +63,7 @@ real if steps cannot mutate their input. Steps return new objects (spread).
   Ambient keys (`"red/event"`, `"red/dry-run"`) flow in with opts; a custom
   `in` must carry them itself if the sub-workflow needs them.
 
-## Scheduler semantics (identical to green)
+## Scheduler semantics
 
 The scheduler runs all safe-to-run steps in parallel, waits when branches may
 still converge, joins converged branches once, and collapses forks cleanly on
@@ -168,16 +167,13 @@ A spec is a flat seq of `{template, target, data, opts?}`:
   for Jinja2. Values are HTML-escaped by default; `|safe` bypasses. Missing
   values render empty.
 - Engine choice: the renderer is a small internal module implementing the
-  subset green exercises (variables, dotted paths, filters incl. `safe`,
-  `for` loops, custom delimiters, missing-value handling) behind a
-  `render(content, data, opts)` interface. Swapping in the
-  `bigconfig-ai/Selmer` TS port (SHA-pinned, treated as vendored) behind the
-  same interface is an explicit follow-up once it passes verification —
-  consumer-facing template compatibility is the reason to adopt it.
+  subset red exercises (variables, dotted paths, filters incl. `safe` and
+  `sort(attribute='...')`, `for` loops, custom delimiters, missing-value
+  handling) behind a `render(content, data, opts)` interface.
 
 ## tofu and ansible
 
-Event-aware steps, exactly green's:
+Event-aware helper steps:
 
 - `tofuStep(opts, {dir, outputKey?})`: non-`"delete"` events → `init` +
   `apply` then `tofu output -json` merged under `outputKey` (default
@@ -195,8 +191,8 @@ Event-aware steps, exactly green's:
   (sorted). `ansibleWithSpec` scaffolds then runs (create) or runs then
   removes (delete).
 - All subprocesses go through one seam: `runtime.exec(cmd, {cwd, env})`.
-  Tests stub `runtime.exec` (the port of green's two `with-redefs [sh/sh …]`
-  sites); it is also the natural hook for future recording features.
+  Tests stub `runtime.exec`; it is also the natural hook for future recording
+  features.
 
 ## dry-run and progress
 
@@ -248,8 +244,9 @@ tofu/ansible unit tests stub `runtime.exec` instead of shelling out.
 
 ## Repository layout
 
-Clojure reference implementation: `src/green/`, `test/green/`,
-`test-resources/` (unchanged, still runs under `bb test` / `clojure -X:test`).
-TypeScript: `src/*.ts`, `test/*.test.ts`; shared test templates are
-text-imported from `test-resources/`. The library's own `package.json` exists
-for publication and the zod dependency; consumers' launcher scripts need none.
+TypeScript source lives in `src/*.ts`; tests live in `test/*.test.ts`; shared
+text-imported templates live in `test-resources/`. Examples are self-contained
+Bun launchers under `examples/*/red` with desired state in `red.yml`. The
+library's own `package.json` exists for publication and the zod dependency;
+consumers' launcher scripts need none once red is available as a version-pinned
+package import.

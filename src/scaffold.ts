@@ -8,29 +8,24 @@
 // imports it as text (`import mainTf from "./main.tf" with { type: "text" }`)
 // and passes {name, content}; nothing is resolved at run time. On
 // "red/event" "delete" the same specs name the targets to remove.
+// Rendering is handled by red's small Selmer-compatible renderer.
 
 import { existsSync, mkdirSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { render } from "selmer";
+import { render, type RenderOpts } from "./renderer.ts";
 import type { Opts } from "./workflow.ts";
 import { StepError } from "./workflow.ts";
+
+export type { RenderOpts } from "./renderer.ts";
 
 export interface Template {
   name: string;
   content: string;
 }
 
-// Forwarded to selmer's render — tagOpen/tagClose/filterOpen/filterClose
+// Forwarded to the renderer — tagOpen/tagClose/filterOpen/filterClose
 // override delimiters (single characters, e.g. "<"/">" and "{"/"}" for
 // Ansible files that reserve {{ }}/{% %} for Jinja2).
-export interface RenderOpts {
-  tagOpen?: string;
-  tagClose?: string;
-  filterOpen?: string;
-  filterClose?: string;
-  [key: string]: unknown;
-}
-
 export interface Spec {
   template: Template;
   target: string;
@@ -39,7 +34,7 @@ export interface Spec {
 }
 
 // Render a template's content with `data`. Optional `opts` are forwarded to
-// selmer's render (delimiter overrides and friends).
+// the renderer (delimiter overrides and friends).
 export function renderTemplate(
   template: Template,
   data: Record<string, unknown>,
