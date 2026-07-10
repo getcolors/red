@@ -1,0 +1,533 @@
+#!/usr/bin/env bun
+// Self-contained red CLI for a REAL 3-node ZooKeeper cluster:
+// OpenTofu (AWS provider pointed at floci, a local AWS emulator) creates
+// one Docker-backed EC2 instance per node, and Ansible over SSH provisions
+// ZooKeeper. Linux only: Ansible and health checks talk straight to the
+// instances' Docker-bridge IPs.
+
+import { existsSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
+import { Socket } from "node:net";
+import createYml from "./resources/zk/ansible/create.yml" with { type: "text" };
+import deleteNodeYml from "./resources/zk/ansible/delete-node.yml" with { type: "text" };
+import zooCfgJ2 from "./resources/zk/ansible/zoo.cfg.j2" with { type: "text" };
+import mainTf from "./resources/zk/main.tf" with { type: "text" };
+import sharedTf from "./resources/zk/shared.tf" with { type: "text" };
+import { ansibleWithSpec, inventoryAdvice, playbook } from "../../src/ansible.ts";
+import { execCli, runCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import * as progress from "../../src/progress.ts";
+import { runtime, type ExecOptions } from "../../src/runtime.ts";
+import { scaffold, type Spec } from "../../src/scaffold.ts";
+import * as tofu from "../../src/tofu.ts";
+import type { InventoryGroup } from "../../src/ansible.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { adviceAdd, step, StepError, workflow } from "../../src/workflow.ts";
+
+const scriptDir = import.meta.dir;
+const flociEndpoint = "http://localhost:4566";
+
+interface ZkServer {
+  id: number;
+  name: string;
+  ip?: string;
+  [key: string]: unknown;
+}
+
+const examplePath = (p?: string) =>
+  p === undefined ? undefined : isAbsolute(p) ? p : join(scriptDir, p);
+
+const workdir = (opts: Opts) => examplePath(opts["zk/workdir"] as string)!;
+const sharedDir = (opts: Opts) => join(workdir(opts), "shared");
+const nodeDir = (opts: Opts, node: ZkServer) => join(workdir(opts), "nodes", String(node.id));
+const sshKey = (opts: Opts) => join(workdir(opts), "ssh", "id_ed25519");
+const nodeInventoryFile = (opts: Opts) =>
+  join(workdir(opts), "ansible", String((opts["zk/node"] as ZkServer).id), "inventory.ini");
+
+function log(...xs: unknown[]): void {
+  runtime.log(...xs);
+}
+
+async function sh(cmd: string[], opts?: ExecOptions): Promise<string> {
+  const res = await runtime.exec(cmd, opts);
+  if (res.exit > 0) {
+    throw new Error(`${cmd[0]} failed: ${res.err || res.out || "(no output)"}`);
+  }
+  return res.out;
+}
+
+async function tool(...cmd: string[]): Promise<boolean> {
+  try {
+    return (await runtime.exec(cmd)).exit === 0;
+  } catch {
+    return false;
+  }
+}
+
+function servers(opts: Opts): ZkServer[] {
+  return (opts["zk/servers"] ?? []) as ZkServer[];
+}
+
+function failed(opts: Opts): boolean {
+  return (opts["red/exit"] ?? 0) > 0;
+}
+
+// --- validation advices ------------------------------------------------------
+
+function checkSchema(opts: Opts): true {
+  const ss = opts["zk/servers"];
+  const problems: string[] = [];
+  if (typeof opts["zk/workdir"] !== "string") problems.push("zk/workdir must be a string");
+  if (typeof opts["zk/ami"] !== "string") problems.push("zk/ami must be a string");
+  if (typeof opts["zk/user"] !== "string") problems.push("zk/user must be a string");
+  if (opts["zk/instance-type"] != null && typeof opts["zk/instance-type"] !== "string") {
+    problems.push("zk/instance-type must be a string when present");
+  }
+  if (!Array.isArray(ss) || ss.length === 0) {
+    problems.push("zk/servers must be a non-empty array");
+  } else {
+    if (!ss.every((s) => Number.isInteger(s?.id) && s.id > 0 && typeof s?.name === "string")) {
+      problems.push("every server needs a positive id and a string name");
+    }
+    if (new Set(ss.map((s) => s.id)).size !== ss.length) problems.push("server id values must be unique");
+    if (new Set(ss.map((s) => s.name)).size !== ss.length) problems.push("server name values must be unique");
+  }
+  if (problems.length) {
+    throw new StepError(`invalid desired state: ${problems.join("; ")}`, { exit: 2 });
+  }
+  return true;
+}
+
+async function checkRequirements(opts: Opts): Promise<true> {
+  if (!opts["red/dry-run"]) {
+    const missing: string[] = [];
+    if (!(await tool("tofu", "version"))) missing.push("tofu");
+    if (!(await tool("ansible-playbook", "--version"))) missing.push("ansible-playbook");
+    if (!(await tool("docker", "ps"))) missing.push("docker");
+    if (!(await tool("aws", "--version"))) missing.push("aws");
+    if (missing.length) {
+      throw new StepError(`missing requirements: ${missing.join(", ")}`, { exit: 2 });
+    }
+  }
+  return true;
+}
+
+function checkNodeInput(opts: Opts): true {
+  const node = opts["zk/node"] as ZkServer | undefined;
+  if (!node || typeof node !== "object" || !node.id) {
+    throw new StepError("step zk/node needs zk/node {id, name} in opts", { exit: 2 });
+  }
+  return true;
+}
+
+// --- prerequisites (:before = setup) ----------------------------------------
+
+const awsEnv = {
+  AWS_ACCESS_KEY_ID: "test",
+  AWS_SECRET_ACCESS_KEY: "test",
+  AWS_DEFAULT_REGION: "us-east-1",
+};
+
+function anyNestedValue(x: unknown): boolean {
+  if (Array.isArray(x)) return x.some(anyNestedValue);
+  return x !== null && x !== undefined && x !== "";
+}
+
+async function runningInstances(): Promise<boolean> {
+  try {
+    const out = await sh(
+      [
+        "aws",
+        "--endpoint-url",
+        flociEndpoint,
+        "ec2",
+        "describe-instances",
+        "--filters",
+        "Name=instance-state-name,Values=running,pending",
+        "--query",
+        "Reservations[*].Instances[*].InstanceId",
+        "--output",
+        "json",
+      ],
+      { env: awsEnv },
+    );
+    return anyNestedValue(JSON.parse(out));
+  } catch {
+    return false;
+  }
+}
+
+function clearTofuState(opts: Opts): void {
+  const root = workdir(opts);
+  if (!existsSync(root)) return;
+  const walk = (dir: string) => {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, ent.name);
+      if (ent.isDirectory()) walk(p);
+      else if (ent.isFile() && ent.name.endsWith(".tfstate")) unlinkSync(p);
+    }
+  };
+  walk(root);
+}
+
+async function flociHealthy(): Promise<boolean> {
+  try {
+    const res = await fetch(`${flociEndpoint}/_localstack/health`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFloci(): Promise<void> {
+  for (let n = 60; n > 0; n -= 1) {
+    if (await flociHealthy()) return;
+    await Bun.sleep(1000);
+  }
+  throw new Error("floci did not become healthy");
+}
+
+async function removeEc2Containers(): Promise<void> {
+  const ids = (await sh(["docker", "ps", "-aq", "--filter", "name=floci-ec2"])).trim();
+  if (ids) await sh(["docker", "rm", "-f", ...ids.split(/\s+/)]);
+}
+
+async function restartFloci(): Promise<void> {
+  await removeEc2Containers();
+  await sh(["docker", "restart", "floci"]);
+  await waitFloci();
+}
+
+async function ensureFloci(opts: Opts): Promise<Opts> {
+  if (!opts["red/dry-run"]) {
+    if (await runningInstances()) {
+      log("floci: instances present — skipping restart");
+    } else {
+      log("floci: no instances — restarting for clean state");
+      await restartFloci();
+      clearTofuState(opts);
+    }
+  }
+  return opts;
+}
+
+async function ensureSshKey(opts: Opts): Promise<Opts> {
+  if (!opts["red/dry-run"]) {
+    const key = sshKey(opts);
+    if (!existsSync(key)) {
+      mkdirSync(dirname(key), { recursive: true });
+      await sh(["ssh-keygen", "-t", "ed25519", "-f", key, "-N", "", "-q"]);
+    }
+  }
+  return opts;
+}
+
+const dryAwareLocalBackend = (dirFn: (opts: Opts) => string) => {
+  const writeBackend = tofu.localBackendAdvice(dirFn);
+  return (opts: Opts): Opts => (opts["red/dry-run"] ? opts : writeBackend(opts));
+};
+
+// --- steps -------------------------------------------------------------------
+
+const startStep: StepFn = async (opts) => {
+  if (opts["red/dry-run"]) return opts;
+  const dir = sharedDir(opts);
+  const specs: Spec[] = [
+    {
+      template: { name: "zk/shared.tf", content: sharedTf },
+      target: join(dir, "shared.tf"),
+      data: { endpoint: flociEndpoint, pubkey: `${sshKey(opts)}.pub` },
+    },
+  ];
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir, outputKey: "zk/shared" });
+    return failed(out) ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir, outputKey: "zk/shared" });
+};
+
+const nodeStep: StepFn = async (opts) => {
+  const node = opts["zk/node"] as ZkServer;
+  const dir = nodeDir(opts, node);
+  const specs: Spec[] = [
+    {
+      template: { name: "zk/main.tf", content: mainTf },
+      target: join(dir, "main.tf"),
+      data: {
+        node,
+        ami: opts["zk/ami"],
+        "instance-type": opts["zk/instance-type"] ?? "t3.micro",
+        endpoint: flociEndpoint,
+        "key-name": "zk",
+      },
+    },
+  ];
+  if (opts["red/event"] === "delete") {
+    const out = await tofu.tofuStep(opts, { dir });
+    return failed(out) ? out : scaffold(out, specs);
+  }
+  return tofu.tofuStep(scaffold(opts, specs), { dir });
+};
+
+const provisionStep: StepFn = (opts) => {
+  const nodes = ((opts["red/branches"] ?? []) as Opts[])
+    .map((b) => b["tofu/outputs"] as ZkServer | undefined)
+    .filter((n): n is ZkServer => Boolean(n))
+    .sort((a, b) => a.id - b.id);
+  return { ...opts, "zk/nodes": nodes };
+};
+
+async function withNodeInfo(opts: Opts): Promise<Opts> {
+  if (opts["red/event"] === "delete" && opts["zk/nodes"] == null) {
+    const node = opts["zk/node"] as ZkServer;
+    const nodeInfo = await tofu.outputs(nodeDir(opts, node)).catch(() => null);
+    return { ...opts, "zk/nodes": nodeInfo?.ip ? [nodeInfo] : [] };
+  }
+  return opts;
+}
+
+function sshOpen(ip: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = new Socket();
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.setTimeout(2000);
+    sock.once("connect", () => finish(true));
+    sock.once("timeout", () => finish(false));
+    sock.once("error", () => finish(false));
+    sock.connect(22, ip);
+  });
+}
+
+async function waitForSsh(opts: Opts): Promise<Opts> {
+  if (opts["red/event"] !== "delete") {
+    const node = opts["zk/node"] as ZkServer;
+    const info = ((opts["zk/nodes"] ?? []) as ZkServer[]).find((n) => n.id === node.id);
+    if (!info?.ip) throw new Error(`no IP known for ${node.name}`);
+    for (let n = 60; n > 0; n -= 1) {
+      if (await sshOpen(info.ip)) return opts;
+      await Bun.sleep(3000);
+    }
+    throw new Error(`ssh on ${node.name} (${info.ip}:22) never came up`);
+  }
+  return opts;
+}
+
+function nodeInventoryData(opts: Opts): Record<string, InventoryGroup> {
+  const node = opts["zk/node"] as ZkServer;
+  const info = ((opts["zk/nodes"] ?? []) as ZkServer[]).find((n) => n.id === node.id);
+  return {
+    zookeeper: {
+      hosts: [{ name: node.name, vars: { ansible_host: info?.ip, zk_id: node.id } }],
+      vars: { ansible_user: opts["zk/user"], ansible_python_interpreter: "/usr/bin/python3" },
+    },
+  };
+}
+
+const ansibleTemplateOpts = {
+  tagOpen: "<",
+  tagClose: ">",
+  filterOpen: "{",
+  filterClose: "}",
+};
+
+function ansibleDir(opts: Opts): string {
+  return join(workdir(opts), "ansible", String((opts["zk/node"] as ZkServer).id));
+}
+
+function ansibleSpecs(opts: Opts): Spec[] {
+  const dir = ansibleDir(opts);
+  return [
+    {
+      template: { name: "zk/ansible/create.yml", content: createYml },
+      target: join(dir, "create.yml"),
+      data: {},
+      opts: ansibleTemplateOpts,
+    },
+    {
+      template: { name: "zk/ansible/delete-node.yml", content: deleteNodeYml },
+      target: join(dir, "delete-node.yml"),
+      data: {},
+      opts: ansibleTemplateOpts,
+    },
+    {
+      template: { name: "zk/ansible/zoo.cfg.j2", content: zooCfgJ2 },
+      target: join(dir, "templates", "zoo.cfg.j2"),
+      data: {},
+      opts: ansibleTemplateOpts,
+    },
+  ];
+}
+
+const zkAnsibleStep: StepFn = async (opts) => {
+  const node = opts["zk/node"] as ZkServer;
+  const deleteEvent = opts["red/event"] === "delete";
+  if (deleteEvent && ((opts["zk/nodes"] ?? []) as unknown[]).length === 0) {
+    log(`ansible: skipping ${node.name} (no state)`);
+    return opts;
+  }
+  log(
+    `ansible: ${playbook(opts, { delete: "delete-node.yml" })} on ${node.name}` +
+      (deleteEvent ? "" : " — a first create takes a few minutes"),
+  );
+  return ansibleWithSpec(
+    opts,
+    {
+      dir: ansibleDir(opts),
+      inventory: nodeInventoryFile(opts),
+      privateKey: sshKey(opts),
+      hostKeyChecking: false,
+      playbooks: { delete: "delete-node.yml" },
+      extraVars: deleteEvent
+        ? undefined
+        : { ensemble: ((opts["zk/nodes"] ?? []) as ZkServer[]).map(({ id, ip }) => ({ id, ip })) },
+    },
+    ansibleSpecs(opts),
+  );
+};
+
+const teardownStep = step(
+  workflow({
+    start: "zk/ansible",
+    wireFn: (s) => {
+      switch (s) {
+        case "zk/ansible":
+          return [zkAnsibleStep, "zk/node"] as const;
+        case "zk/node":
+          return [nodeStep] as const;
+      }
+    },
+  }),
+);
+
+function fourLetter(ip: string, port: number, word: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = new Socket();
+    let data = "";
+    let done = false;
+    const finish = (err?: Error) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      if (err) reject(err);
+      else resolve(data);
+    };
+    sock.setTimeout(3000);
+    sock.once("connect", () => sock.write(word));
+    sock.on("data", (chunk) => {
+      data += chunk.toString();
+    });
+    sock.once("end", () => finish());
+    sock.once("close", () => finish());
+    sock.once("timeout", () => finish(new Error("timeout")));
+    sock.once("error", (e) => finish(e));
+    sock.connect(port, ip);
+  });
+}
+
+async function serverMode(ip: string): Promise<string | undefined> {
+  return /Mode: (\w+)/.exec(await fourLetter(ip, 2181, "srvr"))?.[1];
+}
+
+const healthStep: StepFn = async (opts) => {
+  const nodes = (opts["zk/nodes"] ?? []) as ZkServer[];
+  const modes = await Promise.all(
+    nodes.map(async ({ name, ip }) => ({
+      name,
+      mode: ip ? await serverMode(ip).catch((e) => `error: ${e instanceof Error ? e.message : String(e)}`) : "error: no ip",
+    })),
+  );
+  const tally = modes.reduce<Record<string, number>>((m, { mode }) => {
+    m[mode ?? "unknown"] = (m[mode ?? "unknown"] ?? 0) + 1;
+    return m;
+  }, {});
+  if (nodes.length && tally.leader === 1 && tally.follower === nodes.length - 1) {
+    log("health:", modes.map((m) => `${m.name}=${m.mode}`).join(", "));
+    return { ...opts, "red/exit": 0, "zk/health": modes };
+  }
+  return { ...opts, "red/exit": 1, "zk/health": modes, "red/err": `quorum not healthy: ${JSON.stringify(modes)}` };
+};
+
+function retryAdvice(attempts: number, pauseMs: number) {
+  return async (f: StepFn, opts: Opts): Promise<Opts> => {
+    for (let n = 1; ; n += 1) {
+      const res = await f(opts);
+      if ((res["red/exit"] ?? 0) === 0 || n >= attempts) return res;
+      log(`health: not converged (attempt ${n}/${attempts}), retrying in ${pauseMs}ms`);
+      await Bun.sleep(pauseMs);
+    }
+  };
+}
+
+// --- workflow ----------------------------------------------------------------
+
+const wireFn = (s: string, runOpts: Opts) => {
+  const deleteEvent = runOpts["red/event"] === "delete";
+  switch (s) {
+    case "zk/start":
+      return [startStep, deleteEvent ? "zk/teardown" : "zk/node"] as const;
+    case "zk/node":
+      return [nodeStep, "zk/provision"] as const;
+    case "zk/provision":
+      return [provisionStep, "zk/ansible"] as const;
+    case "zk/ansible":
+      return [zkAnsibleStep, "zk/health"] as const;
+    case "zk/health":
+      return [healthStep] as const;
+    case "zk/teardown":
+      return [teardownStep] as const;
+  }
+};
+
+const nextFn = (s: string, defaultNext: string[] | null, opts: Opts) => {
+  if (failed(opts)) return [];
+  if (s === "zk/start" && opts["red/event"] !== "delete") {
+    return servers(opts).map((n) => ["zk/node", { ...opts, "zk/node": n }] as const);
+  }
+  if (s === "zk/provision") {
+    return servers(opts).map((n) => ["zk/ansible", { ...opts, "zk/node": n }] as const);
+  }
+  if (s === "zk/start" && opts["red/event"] === "delete") {
+    return servers(opts).map((n) => ["zk/teardown", { ...opts, "zk/node": n }] as const);
+  }
+  return (defaultNext ?? []).map((n) => [n, opts] as const);
+};
+
+const inventoryWhenPresent = (opts: Opts): Opts => {
+  if (opts["red/event"] === "delete" && ((opts["zk/nodes"] ?? []) as unknown[]).length === 0) {
+    return opts;
+  }
+  return inventoryAdvice(nodeInventoryFile, nodeInventoryData)(opts);
+};
+
+let wf = workflow({ start: "zk/start", wireFn, nextFn });
+wf = adviceAdd(wf, "zk/start", "before", "floci/shared-backend", dryAwareLocalBackend(sharedDir));
+wf = adviceAdd(wf, "zk/start", "before", "floci/floci", ensureFloci);
+wf = adviceAdd(wf, "zk/start", "before", "floci/ssh-key", ensureSshKey);
+wf = adviceAdd(wf, "zk/start", "before-while", "floci/requirements", checkRequirements);
+wf = adviceAdd(wf, "zk/start", "before-while", "floci/schema", checkSchema);
+wf = adviceAdd(wf, "zk/node", "before", "floci/backend", tofu.localBackendAdvice((o) => nodeDir(o, o["zk/node"])));
+wf = adviceAdd(wf, "zk/node", "before-while", "floci/inputs", checkNodeInput);
+wf = adviceAdd(wf, "zk/ansible", "before", "floci/wait-ssh", waitForSsh);
+wf = adviceAdd(wf, "zk/ansible", "before", "floci/inventory", inventoryWhenPresent);
+wf = adviceAdd(wf, "zk/ansible", "filter-args", "floci/node-info", withNodeInfo);
+wf = adviceAdd(wf, "zk/health", "around", "floci/retry", retryAdvice(12, 5000));
+wf = progress.advise(wf);
+wf = dryRun.advise(wf, ["zk/node", "zk/ansible", "zk/health"]);
+
+// --- CLI ---------------------------------------------------------------------
+
+const fileArg = (a: string) => a === "-f" || a === "--file" || a.startsWith("--file=");
+const defaultArgs = (args: string[]) =>
+  args.some(fileArg) ? args : [...args, "-f", join(scriptDir, "red.yml")];
+
+export const run = (...args: string[]) => runCli(wf, defaultArgs(args));
+
+if (import.meta.main) {
+  await execCli(wf, defaultArgs(Bun.argv.slice(2)));
+}

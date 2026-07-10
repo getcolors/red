@@ -12,3 +12,8 @@ declare module "*.cfg" {
   const text: string;
   export default text;
 }
+
+declare module "*.j2" {
+  const text: string;
+  export default text;
+}

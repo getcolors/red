@@ -22,7 +22,8 @@ bun run typecheck    # run tsc --noEmit
 ```
 
 The ZooKeeper end-to-end tests drive real `tofu` over HCL containing only
-`locals`/`output` blocks and skip when `tofu` is not on `PATH`.
+`locals`/`output` blocks and skip when `tofu` is not on `PATH`. The real floci
+example test is opt-in: `RED_FLOCI_E2E=1 bun test test/floci-zookeeper.test.ts`.
 
 Try examples end-to-end:
 
@@ -44,6 +45,11 @@ cd ../once
 
 cd ../multi-once
 ./red create --dry-run   # offline path; real create needs a real S3 bucket
+./red create
+./red delete
+
+cd ../floci-zookeeper
+./red create --dry-run   # offline path; real create needs Linux + Docker + floci
 ./red create
 ./red delete
 ```
@@ -105,6 +111,23 @@ Main TypeScript modules under `src/`:
 
 - `runtime.ts` — mutable test seam for subprocesses and log lines. All command
   execution goes through `runtime.exec`; tests stub it instead of shelling out.
+
+## Examples
+
+- `examples/zookeeper` — fake 3-node cluster: dynamic fan-out/join, scaffold +
+  tofu, backend-as-advice, dry-run.
+- `examples/multi-zookeeper` — two fake clusters from one embedded workflow;
+  inherited parent advice reaches child step names.
+- `examples/once` — ONCE-style single VPS with provider-swap advice,
+  `compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`, and
+  scaffold-only Ansible config.
+- `examples/multi-once` — many ONCE boxes from one workflow; parent swaps
+  provider/backend advice by inherited id and uses S3 backend keys per
+  deployment + step. Real create needs a real S3 bucket; dry-run is offline.
+- `examples/floci-zookeeper` — real local 3-node ZooKeeper on floci. Linux-only
+  for non-dry-run because it connects directly to Docker-bridge IPs. Requires a
+  floci container named `floci`, `tofu`, `ansible-playbook`, `docker`, and
+  `aws`. Dry-run works offline and should touch nothing.
 
 ## Conventions
 

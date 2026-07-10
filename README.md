@@ -32,7 +32,8 @@ bun run typecheck     # run tsc --noEmit
 ```
 
 The end-to-end ZooKeeper tests use real `tofu` over locals/outputs-only HCL and
-skip automatically when `tofu` is not on `PATH`.
+skip automatically when `tofu` is not on `PATH`. The real floci example test is
+opt-in: `RED_FLOCI_E2E=1 bun test test/floci-zookeeper.test.ts`.
 
 ## The model in one glance
 
@@ -146,6 +147,11 @@ cd ../once
 
 cd ../multi-once
 ./red create --dry-run   # offline path; real create needs an S3 bucket
+./red create
+./red delete
+
+cd ../floci-zookeeper
+./red create --dry-run   # offline path; real create needs Linux + Docker + floci
 ./red create
 ./red delete
 ```
