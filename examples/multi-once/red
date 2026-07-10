@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// -*- mode: typescript-ts; -*-
 // Several fake ONCE boxes from ONE once workflow, composed with wf `step` —
 // the multi-zookeeper idiom applied to the once example. Run from here:
 //   ./red create --dry-run   |   ./red create   |   ./red delete

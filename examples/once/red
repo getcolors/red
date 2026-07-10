@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// -*- mode: typescript-ts; -*-
 // Self-contained red CLI for a single-machine PaaS in the style of
 // Basecamp ONCE. One VPS runs a dockerized website operated by ONCE; red
 // provisions the infra with OpenTofu (fake HCL, locals/output only) and

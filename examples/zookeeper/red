@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// -*- mode: typescript-ts; -*-
 // Self-contained red CLI for a fake ZooKeeper cluster.
 // Run from this directory:   ./red create   |   ./red delete
 //
