@@ -22,7 +22,8 @@ resources through floci.
 
 - `before-while` gates on `zk/start` for schema and requirements.
 - `before` advice on `zk/start` for floci/SSH setup and shared tofu backend.
-- `before` advice on `zk/node` for per-node tofu backends.
+- `before` advice on `zk/node` for per-node tofu backends. Backend advice writes
+  `backend.tf.json` while preserving native JSON values and nested collections.
 - `filter-args` advice on `zk/ansible` to read tofu state during delete.
 - `before` advice on `zk/ansible` for per-node inventory and SSH readiness.
 - `around` retry advice on `zk/health` while ZooKeeper elects a leader.

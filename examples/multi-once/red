@@ -25,7 +25,7 @@
 // bucket + AWS credentials and will not run offline. The offline path is
 // `./red create --dry-run`: the parent's dry-run advice is outermost, so it
 // skips each tofu step AND its `before` provider/backend advice — touching
-// nothing (no main.tf, no backend.tf, no S3).
+// nothing (no main.tf, no backend.tf.json, no S3).
 
 import cloudflareTf from "./resources/once/cloudflare/main.tf" with { type: "text" };
 import doTf from "./resources/once/do/main.tf" with { type: "text" };
@@ -108,7 +108,7 @@ const s3Config = (dirFn: (opts: Opts) => string) => (opts: Opts) => ({
 const startStep: StepFn = (opts) => opts;
 
 // compute is a bare tofu run: its main.tf is written by the "once/provider"
-// advice and its backend.tf by the "once/backend" advice, both `before`.
+// advice and its backend.tf.json by the "once/backend" advice, both `before`.
 const computeStep: StepFn = (opts) => tofu.tofuStep(opts, { dir: serverDir(opts) });
 
 // Scaffold main.tf then apply (create); or destroy then remove main.tf

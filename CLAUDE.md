@@ -89,7 +89,8 @@ Main TypeScript modules under `src/`:
 - `tofu.ts` — event-aware OpenTofu steps. Non-`"delete"` runs `init` + `apply`
   and merges `tofu output -json` under `"tofu/outputs"` by default. `"delete"`
   runs `init` + `destroy`. Backends are `before` advice (`localBackendAdvice`,
-  `s3BackendAdvice`, `gcsBackendAdvice`, `backendAdvice`).
+  `s3BackendAdvice`, `gcsBackendAdvice`, `backendAdvice`) that writes
+  `backend.tf.json` while preserving native JSON shapes.
 
 - `ansible.ts` — event-aware Ansible steps. Non-`"delete"` runs create playbook,
   `"delete"` runs delete playbook. Parses PLAY RECAP under `"ansible/recap"` by

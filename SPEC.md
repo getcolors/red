@@ -5,7 +5,8 @@ library for building idempotent devops CLIs — desired state in YAML, workflows
 as step graphs threaded by a plain object, template-scaffolded config files,
 OpenTofu and Ansible as the muscle.
 
-The port is **behavioral**: the TypeScript test suite defines the contract.
+The port is **behavioral**: green is the canonical model, and the TypeScript
+test suite locks that behavior into red's language-specific contract.
 Conventions stay structurally identical to green's — a green project ports to
 red by mechanical rename — but this repository now contains only red's
 TypeScript/Bun implementation.
@@ -180,7 +181,8 @@ Event-aware helper steps:
   `"tofu/outputs"`, keep it namespaced); `"delete"` → `init` + `destroy`.
   Backends attach as `before` advice (`localBackendAdvice`,
   `s3BackendAdvice`, `gcsBackendAdvice`, generic `backendAdvice`) writing
-  `backend.tf`; config may be a map or a function of opts.
+  `backend.tf.json`; config may be a map or a function of opts, and native JSON
+  values and nested collections retain their shape.
 - `ansibleStep(opts, {...})`: non-`"delete"` → the `create` playbook
   (`create.yml` default), `"delete"` → the `delete` one, via
   `ansible-playbook` in `dir`; `privateKey`, `user`, `extraVars` (JSON `-e`),

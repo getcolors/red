@@ -85,7 +85,7 @@ export const ociProvider = providerAdvice(
 const startStep: StepFn = (opts) => opts;
 
 // compute is a bare tofu run: its main.tf is written by the "once/provider"
-// advice and its backend.tf by the "once/backend" advice, both `before`.
+// advice and its backend.tf.json by the "once/backend" advice, both `before`.
 const computeStep: StepFn = (opts) => tofu.tofuStep(opts, { dir: serverDir(opts) });
 
 // Scaffold main.tf then apply (create); or destroy then remove main.tf

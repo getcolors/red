@@ -39,7 +39,8 @@ RED_FLOCI_E2E=1 bun test test/floci-zookeeper.test.ts
    `work/ssh/`, restarts floci if there are no running instances, and applies a
    shared key-pair tofu root.
 2. The workflow fans out one `zk/node` branch per server. Each branch scaffolds
-   `main.tf`, writes a local backend via advice, and runs tofu against floci.
+   `main.tf`, writes `backend.tf.json` via local-backend advice, and runs tofu
+   against floci.
 3. `zk/provision` joins the tofu branches and collects observed Docker-bridge
    IPs from `tofu output -json`.
 4. The workflow fans out one `zk/ansible` branch per server. Each branch writes

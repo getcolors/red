@@ -104,8 +104,10 @@ Run a project launcher as:
   Selmer-compatible renderer. A file spec is `{template: {name, content},
   target, data, opts?}`; on `"delete"` the same spec removes the rendered
   target and prunes empty parent directories.
-- **OpenTofu and Ansible** integrations are event-aware steps. Backend files
-  and inventories are attached as `before` advice instead of being hardwired.
+- **OpenTofu and Ansible** integrations are event-aware steps. OpenTofu
+  backends are written as `backend.tf.json`, preserving native JSON values and
+  nested collections; backends and inventories are attached as `before` advice
+  instead of being hardwired.
 - **Dry-run and progress** are advice layers, not engine features.
 
 ## Modules

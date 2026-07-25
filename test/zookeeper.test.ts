@@ -186,7 +186,7 @@ describe.skipIf(!Bun.which("tofu"))("zookeeper end-to-end (real tofu)", () => {
         const dir = `${work}/nodes/${id}`;
         expect(existsSync(`${dir}/main.tf`)).toBe(true);
         // advice wrote the backend
-        expect(existsSync(`${dir}/backend.tf`)).toBe(true);
+        expect(existsSync(`${dir}/backend.tf.json`)).toBe(true);
         // local backend state
         expect(existsSync(`${dir}/terraform.tfstate`)).toBe(true);
         const cfg = readFileSync(`${dir}/zoo.cfg`, "utf8");

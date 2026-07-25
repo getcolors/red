@@ -3,8 +3,8 @@
 // `tofu output -json` is merged into opts under a namespaced key
 // ("tofu/outputs" by default). The backend is not hardwired: attach a
 // `before` advice built by `backendAdvice`, `localBackendAdvice`,
-// `s3BackendAdvice`, or `gcsBackendAdvice` to write backend.tf before the
-// tofu command runs.
+// `s3BackendAdvice`, or `gcsBackendAdvice` to write backend.tf.json before
+// the tofu command runs.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -59,17 +59,27 @@ export async function tofuStep(
   return { ...opts, "red/exit": 0, [outputKey]: await outputs(dir) };
 }
 
-function hclValue(v: unknown): string {
-  if (typeof v === "boolean" || typeof v === "number") return String(v);
-  return JSON.stringify(String(v));
+function jsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonValue);
+  if (value !== null && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === Object.prototype || prototype === null) {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([key, nested]) => [key, jsonValue(nested)]),
+      );
+    }
+  }
+  return value;
 }
 
-function backendHcl(type: string, config: Record<string, unknown>): string {
-  const attrs = Object.entries(config)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `    ${k} = ${hclValue(v)}\n`)
-    .join("");
-  return `terraform {\n  backend "${type}" {\n${attrs}  }\n}\n`;
+function backendJson(type: string, config: Record<string, unknown>): string {
+  return `${JSON.stringify(
+    { terraform: { backend: { [type]: jsonValue(config) } } },
+    null,
+    2,
+  )}\n`;
 }
 
 type BackendConfig = Record<string, unknown> | ((opts: Opts) => Record<string, unknown>);
@@ -80,13 +90,14 @@ function resolveConfig(config: BackendConfig, opts: Opts): Record<string, unknow
 
 // Build a `before` advice that writes a backend config into the directory
 // returned by dirFn(opts) before the step runs. `type` is the backend name
-// ("local", "s3", "gcs", …); `config` is a flat map of backend attributes,
-// or a function of opts returning one.
+// ("local", "s3", "gcs", …); `config` is a map of backend attributes,
+// or a function of opts returning one. Objects, arrays, booleans, numbers,
+// strings, and null retain their native JSON shape.
 export function backendAdvice(dirFn: (opts: Opts) => string, type: string, config: BackendConfig) {
   return (opts: Opts): Opts => {
     const dir = dirFn(opts);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "backend.tf"), backendHcl(type, resolveConfig(config, opts)));
+    writeFileSync(join(dir, "backend.tf.json"), backendJson(type, resolveConfig(config, opts)));
     return opts;
   };
 }

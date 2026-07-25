@@ -316,7 +316,7 @@ const applyNode = (opts: Opts) =&gt;
   <li>Non-zero process exits become <code>"red/exit"</code> and <code>"red/err"</code>.</li>
   <li>All subprocesses go through <code>runtime.exec</code>, which tests can stub.</li>
 </ul>
-<p>Backends are not hardwired. <code>backendAdvice</code> writes <code>backend.tf</code> for any backend type and flat config map (or function of opts). Helpers ship for local, S3, and GCS.</p>
+<p>Backends are not hardwired. <code>backendAdvice</code> writes <code>backend.tf.json</code> for any backend type and config map (or function of opts), preserving native JSON values and nested collections. Helpers ship for local, S3, and GCS.</p>
 <pre><code>const withBackend = adviceAdd(
   wf,
   "zk/tofu",
@@ -492,7 +492,7 @@ cd ../floci-zookeeper
 <tr><td><code>scaffold</code></td><td><code>(opts, specs) =&gt; opts</code>; create or delete rendered targets.</td></tr>
 <tr><td><code>tofu.outputs</code></td><td><code>(dir) =&gt; Promise&lt;Record&lt;string, unknown&gt;&gt;</code>; parse <code>tofu output -json</code>.</td></tr>
 <tr><td><code>tofu.tofuStep</code></td><td><code>(opts, {dir, outputKey?}) =&gt; Promise&lt;Opts&gt;</code>.</td></tr>
-<tr><td><code>tofu.backendAdvice</code></td><td><code>(dirFn, type, config) =&gt; beforeAdvice</code>; write <code>backend.tf</code>.</td></tr>
+<tr><td><code>tofu.backendAdvice</code></td><td><code>(dirFn, type, config) =&gt; beforeAdvice</code>; write <code>backend.tf.json</code>.</td></tr>
 <tr><td><code>tofu.localBackendAdvice</code></td><td><code>(dirFn, config?) =&gt; beforeAdvice</code>.</td></tr>
 <tr><td><code>tofu.s3BackendAdvice</code></td><td><code>(dirFn, config) =&gt; beforeAdvice</code>.</td></tr>
 <tr><td><code>tofu.gcsBackendAdvice</code></td><td><code>(dirFn, config) =&gt; beforeAdvice</code>.</td></tr>
