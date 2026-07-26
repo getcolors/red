@@ -209,7 +209,7 @@ Built on advice, not the engine:
 
 `./red <event> [-f|--file red.yml] [--start step] [--end step] [--dry-run]`,
 parsed with `util.parseArgs` (event is the positional). `runCli(wf, args)` is
-the non-exiting, testable form: loads YAML, overlays `RED_PAR_*`, stamps
+the non-exiting, testable form: loads YAML, overlays `COLORS_PAR_*`, stamps
 `"red/event"` (and `"red/dry-run"`), applies workflow slicing, runs,
 returns final opts; exit 2 with a message on usage/missing-file/parse errors.
 `execCli(wf, args)` prints `"red/err"`/`"red/trace"` to stderr and

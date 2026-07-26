@@ -4,6 +4,7 @@
 // graph.
 
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { Opts, Workflow } from "./workflow.ts";
 import { run } from "./workflow.ts";
@@ -11,7 +12,9 @@ import { run } from "./workflow.ts";
 export const usage =
   "Usage: red <event> [-f|--file red.yml] [--start step] [--end step] [--dry-run]";
 
-const parPrefix = "RED_PAR_";
+// The parameter namespace every colour shares, so one variable serves green,
+// red and blue without naming any of them.
+const parPrefix = "COLORS_PAR_";
 
 export function parName(key: string): string {
   return `${parPrefix}${key.toUpperCase().replaceAll("-", "_")}`;
@@ -62,7 +65,13 @@ export async function runCli(workflow: Workflow, args: string[]): Promise<Opts> 
     if (!existsSync(values.file)) {
       return { "red/exit": 2, "red/err": `desired state file not found: ${values.file}` };
     }
-    const state = readPars((Bun.YAML.parse(readFileSync(values.file, "utf8")) ?? {}) as Opts);
+    // "red/state-file" is the absolute path the state came from, so a project
+    // can resolve its own relative paths against the file rather than against
+    // whatever directory the command happened to run in.
+    const state = readPars({
+      ...((Bun.YAML.parse(readFileSync(values.file, "utf8")) ?? {}) as Opts),
+      "red/state-file": resolve(values.file),
+    });
     const wf: Workflow = {
       ...workflow,
       ...(values.start ? { start: values.start } : {}),

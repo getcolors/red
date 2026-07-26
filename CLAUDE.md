@@ -105,7 +105,7 @@ Main TypeScript modules under `src/`:
 
 - `cli.ts` — `runCli` / `execCli`: parses `./red <event> [-f red.yml]
   [--start step] [--end step] [--dry-run]`, loads YAML with `Bun.YAML.parse`,
-  overlays `RED_PAR_*`, stamps `"red/event"`, and runs the workflow. Exit 2 is
+  overlays `COLORS_PAR_*`, stamps `"red/event"`, and runs the workflow. Exit 2 is
   reserved for usage/config errors.
 
 - `gates.ts` — Zod schema gates for `before-while`. Gates validate and return

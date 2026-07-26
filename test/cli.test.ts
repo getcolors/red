@@ -81,14 +81,25 @@ test("usage errors exit 2", async () => {
   expect(badFlag["red/exit"]).toBe(2);
 });
 
-test("RED_PAR overlays flat keys with type coercion", () => {
-  expect(parName("compute-prevent-destroy")).toBe("RED_PAR_COMPUTE_PREVENT_DESTROY");
+test("COLORS_PAR overlays flat keys with type coercion", () => {
+  expect(parName("compute-prevent-destroy")).toBe("COLORS_PAR_COMPUTE_PREVENT_DESTROY");
   expect(
     readPars(
       { "compute-prevent-destroy": true, port: 1 },
-      { RED_PAR_COMPUTE_PREVENT_DESTROY: "false", RED_PAR_PORT: "587", RED_PAR_TOKEN: "x" },
+      { COLORS_PAR_COMPUTE_PREVENT_DESTROY: "false", COLORS_PAR_PORT: "587", COLORS_PAR_TOKEN: "x" },
     ),
   ).toMatchObject({ "compute-prevent-destroy": false, port: 587, token: "x" });
+});
+
+test("no colour keeps a prefix of its own", () => {
+  expect(
+    readPars({}, {
+      GREEN_PAR_DO_TOKEN: "tok",
+      RED_PAR_DO_TOKEN: "tok",
+      BLUE_PAR_DO_TOKEN: "tok",
+      ONCE_PAR_DO_TOKEN: "tok",
+    }),
+  ).toEqual({});
 });
 
 test("namespaced keys and YAML 1.2 semantics survive the load", async () => {
