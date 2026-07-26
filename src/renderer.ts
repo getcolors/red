@@ -3,8 +3,8 @@
 // Supported:
 // - Variables with dotted paths: {{name}}, {{node.id}}; missing values -> "".
 // - HTML escaping by default; the `safe` filter bypasses escaping.
-// - `for` loops: {% for x in xs %}...{% endfor %}; loops may nest.
-// - Filter pipelines, currently `safe` and `sort(attribute='field')`.
+// - `for` loops and `if` blocks; blocks may nest.
+// - Filter pipelines: `safe`, `not-empty`, and `sort(attribute='field')`.
 // - Selmer-style delimiter overrides: tagOpen/tagClose/filterOpen/filterClose
 //   are single-character pieces. Defaults make variables {{ }} and tags {% %};
 //   e.g. {tagOpen:"<", tagClose:">", filterOpen:"{", filterClose:"}"}
@@ -185,6 +185,14 @@ function applyFilter(result: EvalResult, filter: string): EvalResult {
       return { ...result, safe: true };
     case "sort":
       return { value: sortValue(result.value, filter), safe: result.safe };
+    case "not-empty": {
+      const value = result.value;
+      const nonEmpty =
+        value !== null && value !== undefined &&
+        (!(typeof value === "string" || Array.isArray(value)) || value.length > 0) &&
+        (!(typeof value === "object") || Array.isArray(value) || Object.keys(value as object).length > 0);
+      return { value: nonEmpty ? value : null, safe: result.safe };
+    }
     default:
       // Unknown filters are deliberately conservative: keep the value as-is.
       // This mirrors the renderer's small-subset role without corrupting data.
@@ -219,6 +227,48 @@ function parseFor(tag: string): { name: string; expr: string } | null {
   const m = /^for\s+([^\s]+)\s+in\s+([\s\S]+)$/.exec(tag.trim());
   if (!m) return null;
   return { name: m[1]!, expr: m[2]!.trim() };
+}
+
+function parseIf(tag: string): string | null {
+  const m = /^if\s+([\s\S]+)$/.exec(tag.trim());
+  return m?.[1]?.trim() ?? null;
+}
+
+function truthy(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== false;
+}
+
+function findMatchingIf(
+  content: string,
+  bodyStart: number,
+  d: Delimiters,
+): { thenEnd: number; elseStart?: number; elseEnd?: number; afterEnd: number } {
+  let depth = 1;
+  let idx = bodyStart;
+  let elseTag: { start: number; end: number } | undefined;
+  while (idx < content.length) {
+    const tagStart = content.indexOf(d.tagOpen, idx);
+    if (tagStart < 0) break;
+    const contentStart = tagStart + d.tagOpen.length;
+    const tagEnd = content.indexOf(d.tagClose, contentStart);
+    if (tagEnd < 0) break;
+    const tag = content.slice(contentStart, tagEnd).trim();
+    if (parseIf(tag)) depth += 1;
+    else if (tag === "endif") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          thenEnd: elseTag?.start ?? tagStart,
+          ...(elseTag ? { elseStart: elseTag.end, elseEnd: tagStart } : {}),
+          afterEnd: tagEnd + d.tagClose.length,
+        };
+      }
+    } else if (tag === "else" && depth === 1) {
+      elseTag = { start: tagStart, end: tagEnd + d.tagClose.length };
+    }
+    idx = tagEnd + d.tagClose.length;
+  }
+  throw new Error("unterminated if block in template");
 }
 
 function findMatchingEndfor(
@@ -282,6 +332,7 @@ function renderBlock(content: string, ctx: Record<string, unknown>, d: Delimiter
       }
       const tag = content.slice(tagStart, tagEnd).trim();
       const loop = parseFor(tag);
+      const condition = parseIf(tag);
       if (loop) {
         const bodyStart = tagEnd + d.tagClose.length;
         const { bodyEnd, afterEnd } = findMatchingEndfor(content, bodyStart, d);
@@ -291,9 +342,19 @@ function renderBlock(content: string, ctx: Record<string, unknown>, d: Delimiter
           out += renderBlock(body, { ...ctx, [loop.name]: item }, d);
         }
         idx = afterEnd;
-      } else if (tag === "endfor") {
-        // The matching endfor is consumed by the loop handler. A stray one is
-        // ignored, matching the forgiving behavior expected from this tiny DSL.
+      } else if (condition) {
+        const bodyStart = tagEnd + d.tagClose.length;
+        const match = findMatchingIf(content, bodyStart, d);
+        const { value } = evalExpr(condition, ctx);
+        const body = truthy(value)
+          ? content.slice(bodyStart, match.thenEnd)
+          : match.elseStart === undefined
+            ? ""
+            : content.slice(match.elseStart, match.elseEnd);
+        out += renderBlock(body, ctx, d);
+        idx = match.afterEnd;
+      } else if (["endfor", "endif", "else"].includes(tag)) {
+        // Matching closing tags are consumed by their block handlers.
         idx = tagEnd + d.tagClose.length;
       } else {
         // Unsupported tags render empty rather than leaking template syntax into

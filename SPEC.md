@@ -162,15 +162,10 @@ A spec is a flat seq of `{template, target, data, opts?}`:
 - `target` is itself rendered against `data` (paths are templates too).
 - On `"red/event": "delete"` the same specs name the targets to remove, with
   immediate empty-parent-directory pruning.
-- Rendering is Selmer's template language. Supported delimiter overrides via
-  `opts` (`tagOpen`, `tagClose`, `filterOpen`, `filterClose` — single
-  characters, as in Selmer) let scaffolded Ansible files keep `{{ }}`/`{% %}`
-  for Jinja2. Values are HTML-escaped by default; `|safe` bypasses. Missing
-  values render empty.
-- Engine choice: the renderer is a small internal module implementing the
-  subset red exercises (variables, dotted paths, filters incl. `safe` and
-  `sort(attribute='...')`, `for` loops, custom delimiters, missing-value
-  handling) behind a `render(content, data, opts)` interface.
+- Rendering is Selmer's template language. Delimiter overrides let Ansible
+  files keep `{{ }}`/`{% %}` for Jinja2. Values are HTML-escaped by default;
+  `|safe` bypasses. Variables, `for`, `if`, `not-empty`, sorted collections,
+  custom delimiters, and missing values cover production templates.
 
 ## tofu and ansible
 
@@ -180,9 +175,10 @@ Event-aware helper steps:
   `apply` then `tofu output -json` merged under `outputKey` (default
   `"tofu/outputs"`, keep it namespaced); `"delete"` → `init` + `destroy`.
   Backends attach as `before` advice (`localBackendAdvice`,
-  `s3BackendAdvice`, `gcsBackendAdvice`, generic `backendAdvice`) writing
-  `backend.tf.json`; config may be a map or a function of opts, and native JSON
-  values and nested collections retain their shape.
+  `s3BackendAdvice`, `gcsBackendAdvice`, `r2BackendAdvice`, generic
+  `backendAdvice`). Per-command environments keep credentials out of files;
+  `tofuWithSpec` supports build, and deterministic HCL/JSON helpers match
+  Green's artifact bytes.
 - `ansibleStep(opts, {...})`: non-`"delete"` → the `create` playbook
   (`create.yml` default), `"delete"` → the `delete` one, via
   `ansible-playbook` in `dir`; `privateKey`, `user`, `extraVars` (JSON `-e`),
@@ -192,7 +188,7 @@ Event-aware helper steps:
   inventory; `inventoryIni` renders groups/hosts/vars deterministically
   (sorted). `ansibleWithSpec` scaffolds then runs (create) or runs then
   removes (delete).
-- All subprocesses go through one seam: `runtime.exec(cmd, {cwd, env})`.
+- All subprocesses go through one seam: `runtime.exec(cmd, {cwd, env, timeoutMs})`.
   Tests stub `runtime.exec`; it is also the natural hook for future recording
   features.
 
@@ -213,8 +209,8 @@ Built on advice, not the engine:
 
 `./red <event> [-f|--file red.yml] [--start step] [--end step] [--dry-run]`,
 parsed with `util.parseArgs` (event is the positional). `runCli(wf, args)` is
-the non-exiting, testable form: loads the YAML state, stamps `"red/event"`
-(and `"red/dry-run"`), applies `--start`/`--end` as a workflow slice, runs,
+the non-exiting, testable form: loads YAML, overlays `RED_PAR_*`, stamps
+`"red/event"` (and `"red/dry-run"`), applies workflow slicing, runs,
 returns final opts; exit 2 with a message on usage/missing-file/parse errors.
 `execCli(wf, args)` prints `"red/err"`/`"red/trace"` to stderr and
 `process.exit`s with `"red/exit"`.

@@ -11,6 +11,36 @@ import { run } from "./workflow.ts";
 export const usage =
   "Usage: red <event> [-f|--file red.yml] [--start step] [--end step] [--dry-run]";
 
+const parPrefix = "RED_PAR_";
+
+export function parName(key: string): string {
+  return `${parPrefix}${key.toUpperCase().replaceAll("-", "_")}`;
+}
+
+function coerce(old: unknown, value: string): unknown {
+  if (typeof old === "boolean") {
+    if (value.toLowerCase() === "true") return true;
+    if (value.toLowerCase() === "false") return false;
+  }
+  if (typeof old === "number" && Number.isInteger(old) && /^-?\d+$/.test(value)) {
+    return Number(value);
+  }
+  return value;
+}
+
+export function readPars(
+  opts: Opts,
+  env: Record<string, string | undefined> = process.env,
+): Opts {
+  return Object.entries(env).reduce((result, [name, value]) => {
+    if (!name.startsWith(parPrefix) || name.length === parPrefix.length || value === undefined) {
+      return result;
+    }
+    const key = name.slice(parPrefix.length).toLowerCase().replaceAll("_", "-");
+    return { ...result, [key]: coerce(result[key], value) };
+  }, { ...opts });
+}
+
 // Parse `args`, load the desired state, stamp "red/event", run `workflow`.
 // Returns the final opts map ("red/exit" 2 on usage/state-file errors).
 export async function runCli(workflow: Workflow, args: string[]): Promise<Opts> {
@@ -32,7 +62,7 @@ export async function runCli(workflow: Workflow, args: string[]): Promise<Opts> 
     if (!existsSync(values.file)) {
       return { "red/exit": 2, "red/err": `desired state file not found: ${values.file}` };
     }
-    const state = (Bun.YAML.parse(readFileSync(values.file, "utf8")) ?? {}) as Opts;
+    const state = readPars((Bun.YAML.parse(readFileSync(values.file, "utf8")) ?? {}) as Opts);
     const wf: Workflow = {
       ...workflow,
       ...(values.start ? { start: values.start } : {}),

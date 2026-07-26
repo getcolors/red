@@ -78,7 +78,8 @@ Main TypeScript modules under `src/`:
 
 - `renderer.ts` — small internal Selmer-compatible renderer used by scaffolding.
   Supports variables, dotted paths, missing values as empty, HTML escaping by
-  default, `safe`, `sort(attribute='...')`, `for` loops, and delimiter overrides
+  default, `safe`, `not-empty`, `sort(attribute='...')`, `for` loops, `if`
+  blocks, and delimiter overrides
   for templates that must preserve Jinja2 `{{ }}` / `{% %}`.
 
 - `scaffold.ts` — flat file-spec DSL. Specs are `{template: {name, content},
@@ -89,8 +90,9 @@ Main TypeScript modules under `src/`:
 - `tofu.ts` — event-aware OpenTofu steps. Non-`"delete"` runs `init` + `apply`
   and merges `tofu output -json` under `"tofu/outputs"` by default. `"delete"`
   runs `init` + `destroy`. Backends are `before` advice (`localBackendAdvice`,
-  `s3BackendAdvice`, `gcsBackendAdvice`, `backendAdvice`) that writes
-  `backend.tf.json` while preserving native JSON shapes.
+  `s3BackendAdvice`, `gcsBackendAdvice`, `r2BackendAdvice`, `backendAdvice`).
+  Commands accept per-run environments; `tofuWithSpec` supports build, and the
+  HCL/JSON construction helpers match Green's deterministic bytes.
 
 - `ansible.ts` — event-aware Ansible steps. Non-`"delete"` runs create playbook,
   `"delete"` runs delete playbook. Parses PLAY RECAP under `"ansible/recap"` by
@@ -103,15 +105,16 @@ Main TypeScript modules under `src/`:
 
 - `cli.ts` — `runCli` / `execCli`: parses `./red <event> [-f red.yml]
   [--start step] [--end step] [--dry-run]`, loads YAML with `Bun.YAML.parse`,
-  stamps `"red/event"`, and runs the workflow. Exit 2 is reserved for
-  usage/config errors.
+  overlays `RED_PAR_*`, stamps `"red/event"`, and runs the workflow. Exit 2 is
+  reserved for usage/config errors.
 
 - `gates.ts` — Zod schema gates for `before-while`. Gates validate and return
   the original opts; they must never replace opts with parsed output because Zod
   can strip unrelated namespace keys.
 
 - `runtime.ts` — mutable test seam for subprocesses and log lines. All command
-  execution goes through `runtime.exec`; tests stub it instead of shelling out.
+  execution goes through `runtime.exec`, with per-command environments and
+  timeouts; tests stub it instead of shelling out.
 
 ## Examples
 

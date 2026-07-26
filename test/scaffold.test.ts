@@ -73,6 +73,16 @@ test("renderer supports escaping, safe, loops, sort, and missing values", () => 
   ).toBe("&lt;tag&gt;&amp;|<tag>&\n1=a;2=b;");
 });
 
+test("renderer supports if and not-empty with custom delimiters", () => {
+  const template = {
+    name: "inline-if",
+    content: "<% if value|not-empty %><{ value }><% else %>none<% endif %>",
+  };
+  const opts = { tagOpen: "<", tagClose: ">", filterOpen: "{", filterClose: "}" };
+  expect(renderTemplate(template, { value: "yes" }, opts)).toBe("yes");
+  expect(renderTemplate(template, { value: "" }, opts)).toBe("none");
+});
+
 test("a template without content throws with context", () => {
   expect(() =>
     scaffold({ "red/event": "create" }, [

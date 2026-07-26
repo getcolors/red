@@ -122,8 +122,10 @@ export async function ansibleWithSpec(
   ansibleConfig: AnsibleConfig,
   specs: Spec[],
 ): Promise<Opts> {
+  if (opts["red/event"] === "build") return scaffold(opts, specs);
   if (opts["red/event"] === "delete") {
-    const ran = await ansibleStep(opts, ansibleConfig);
+    const rendered = scaffold({ ...opts, "red/event": "create" }, specs);
+    const ran = await ansibleStep({ ...rendered, "red/event": "delete" }, ansibleConfig);
     return (ran["red/exit"] ?? 0) > 0 ? ran : scaffold(ran, specs);
   }
   return ansibleStep(scaffold(opts, specs), ansibleConfig);

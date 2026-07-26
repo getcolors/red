@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli } from "../src/cli.ts";
+import { parName, readPars, runCli } from "../src/cli.ts";
 import type { Opts } from "../src/workflow.ts";
 import { workflow } from "../src/workflow.ts";
 
@@ -79,6 +79,16 @@ test("usage errors exit 2", async () => {
   // unknown flag
   const badFlag = await runCli(probeWf(), ["create", "--bogus"]);
   expect(badFlag["red/exit"]).toBe(2);
+});
+
+test("RED_PAR overlays flat keys with type coercion", () => {
+  expect(parName("compute-prevent-destroy")).toBe("RED_PAR_COMPUTE_PREVENT_DESTROY");
+  expect(
+    readPars(
+      { "compute-prevent-destroy": true, port: 1 },
+      { RED_PAR_COMPUTE_PREVENT_DESTROY: "false", RED_PAR_PORT: "587", RED_PAR_TOKEN: "x" },
+    ),
+  ).toMatchObject({ "compute-prevent-destroy": false, port: 587, token: "x" });
 });
 
 test("namespaced keys and YAML 1.2 semantics survive the load", async () => {
