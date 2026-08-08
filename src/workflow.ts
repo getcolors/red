@@ -619,19 +619,19 @@ async function schedulerStep(
 // and ambient keys like "red/event" and "red/dry-run" flow in with opts.
 //
 // The enclosing run's advice is inherited: the nested run merges it over the
-// sub-workflow's own. The engine re-stamps the inherited registry after `in`
-// runs, so `in` may build sub-opts from scratch without severing inheritance.
+// sub-workflow's own. The engine re-stamps the inherited registry after `inFn`
+// runs, so `inFn` may build sub-opts from scratch without severing inheritance.
 //
 // Options:
-//   in:  (opts) => subOpts        — shape the opts entering the sub-workflow
-//   out: (opts, subResult) => opts — merge the sub-result back into the
-//                                    parent's opts (default: the sub-result
-//                                    itself is the step's result)
+//   inFn:  (opts) => subOpts        — shape the opts entering the sub-workflow
+//   outFn: (opts, subResult) => opts — merge the sub-result back into the
+//                                      parent's opts (default: the sub-result
+//                                      itself is the step's result)
 export function step(
   wf: Workflow,
-  opts: { in?: (opts: Opts) => Opts; out?: (opts: Opts, subResult: Opts) => Opts } = {},
+  opts: { inFn?: (opts: Opts) => Opts; outFn?: (opts: Opts, subResult: Opts) => Opts } = {},
 ): StepFn {
-  const { in: inFn, out: outFn } = opts;
+  const { inFn, outFn } = opts;
   return async (o: Opts): Promise<Opts> => {
     const inherited = o[INHERITED];
     let subOpts = inFn ? inFn(o) : o;

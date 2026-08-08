@@ -356,7 +356,7 @@ test("sub-workflow failure halts the parent", async () => {
   expect(res.seen).toBeUndefined();
 });
 
-test("step in/out scope the sub-workflow", async () => {
+test("step inFn/outFn scope the sub-workflow", async () => {
   const sub = workflow({
     start: "s/a",
     wireFn: () => [(o) => ({ ...o, result: 2 * o.n })],
@@ -365,14 +365,14 @@ test("step in/out scope the sub-workflow", async () => {
     start: "p/sub",
     wireFn: () => [
       step(sub, {
-        in: (o) => ({ "red/event": o["red/event"], n: o.parentN }),
-        out: (o, r) => ({ ...o, doubled: r.result }),
+        inFn: (o) => ({ "red/event": o["red/event"], n: o.parentN }),
+        outFn: (o, r) => ({ ...o, doubled: r.result }),
       }),
     ],
   });
   const res = await run(parent, { "red/event": "create", parentN: 21, keepMe: "yes" });
   expect(res.doubled).toBe(42);
-  // out preserved the parent opts
+  // outFn preserved the parent opts
   expect(res.keepMe).toBe("yes");
 });
 

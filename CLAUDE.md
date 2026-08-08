@@ -66,7 +66,8 @@ Main TypeScript modules under `src/`:
   `"red/branches"`; failed forks collapse and propagate the worst exit.
   The step boundary deep-freezes input, catches thrown errors, rejects non-plain
   object returns, stamps `"red/step"`, and removes private inherited-advice
-  state from results. `step(wf, {in, out})` embeds workflows as ordinary steps.
+  state from results. `step(wf, {inFn, outFn})` embeds workflows as ordinary
+  steps.
 
 - `advice.ts` — Emacs `nadvice`-style combinators: `around`, `before`, `after`,
   `override`, `before-while`, `before-until`, `after-while`, `after-until`,

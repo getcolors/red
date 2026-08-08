@@ -505,14 +505,14 @@ test("inheritance survives a scoping in-fn", async () => {
   const parent = adviceAdd(
     workflow({
       start: "p/sub",
-      wireFn: () => [step(singleStepWf(), { in: (o) => ({ n: o.n }) })],
+      wireFn: () => [step(singleStepWf(), { inFn: (o) => ({ n: o.n }) })],
     }),
     "t/step",
     "filter-return",
     "test/p",
     (o: Opts) => log(o, "p"),
   );
-  // in built sub-opts from scratch; the engine re-stamped the registry
+  // inFn built sub-opts from scratch; the engine re-stamped the registry
   expect((await run(parent, { n: 1 })).log).toEqual(["base", "p"]);
 });
 

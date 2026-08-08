@@ -256,7 +256,7 @@ const deploymentsWireFn = (s: string) => {
     case "multi/deployment":
       return [
         step(onceWf, {
-          in: (opts) => {
+          inFn: (opts) => {
             const d = opts["multi/deployment"];
             // carry ambient keys by spreading opts (keeps red/event,
             // red/dry-run, inherited advice), then project this deployment's

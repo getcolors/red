@@ -114,7 +114,7 @@ const twoClustersWf = workflow({
       case "clusters/cluster":
         return [
           step(clusterWf, {
-            in: (opts) => {
+            inFn: (opts) => {
               const c = opts["zk/cluster"];
               return {
                 ...opts,

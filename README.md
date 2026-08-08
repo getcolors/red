@@ -98,7 +98,7 @@ Run a project launcher as:
   `after`, `override`, while/until variants, `filter-args`, and
   `filter-return`. Advice can target one step or all steps, has deterministic
   depth/add-order stacking, and is inherited through embedded workflows.
-- **Composition** uses `step(subWorkflow, { in, out })` to turn a workflow into
+- **Composition** uses `step(subWorkflow, { inFn, outFn })` to turn a workflow into
   an ordinary step.
 - **Scaffolding** renders text-imported templates with a small internal
   Selmer-compatible renderer. A file spec is `{template: {name, content},

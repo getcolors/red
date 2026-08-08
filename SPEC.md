@@ -58,11 +58,11 @@ real if steps cannot mutate their input. Steps return new objects (spread).
 - `workflow({start, end?, wireFn, nextFn?})` constructs a workflow **value**;
   every constructor/advice function is pure — workflows are safe to branch
   and share. `end` is an inclusive slice boundary (runs, then stops).
-- `step(wf, {in?, out?})` turns a workflow into an ordinary step function so
-  workflows compose. `in` shapes the opts entering the sub-workflow, `out`
+- `step(wf, {inFn?, outFn?})` turns a workflow into an ordinary step function so
+  workflows compose. `inFn` shapes the opts entering the sub-workflow, `outFn`
   merges the result back (default: the sub-result is the step's result).
   Ambient keys (`"red/event"`, `"red/dry-run"`) flow in with opts; a custom
-  `in` must carry them itself if the sub-workflow needs them.
+  `inFn` must carry them itself if the sub-workflow needs them.
 
 ## Scheduler semantics
 
