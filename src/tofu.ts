@@ -154,6 +154,31 @@ export function r2BackendAdvice(dirFn: (opts: Opts) => string, config: BackendCo
   });
 }
 
+export interface ConventionalBackendConfig {
+  dir: (opts: Opts) => string;
+  key: (opts: Opts) => string;
+  choose?: (opts: Opts) => string;
+  fields?: {
+    s3?: { bucket?: string; region?: string };
+    r2?: { bucket?: string; endpoint?: string };
+  };
+}
+
+export function conventionalBackendAdvice(config: ConventionalBackendConfig) {
+  const fields = config.fields ?? {};
+  const s3 = { bucket: "s3-bucket", region: "s3-region", ...fields.s3 };
+  const r2 = { bucket: "r2-bucket", endpoint: "r2-endpoint", ...fields.r2 };
+  return backends(config.choose ?? ((o) => String(o["provider-backend"] ?? "local")), {
+    local: localBackendAdvice(config.dir),
+    s3: s3BackendAdvice(config.dir, (o) => ({
+      bucket: o[s3.bucket], key: config.key(o), region: o[s3.region],
+    })),
+    r2: r2BackendAdvice(config.dir, (o) => ({
+      bucket: o[r2.bucket], key: config.key(o), endpoint: o[r2.endpoint],
+    })),
+  });
+}
+
 export function backends(
   choose: (opts: Opts) => string,
   advices: Record<string, (opts: Opts) => Opts>,

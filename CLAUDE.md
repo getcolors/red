@@ -83,16 +83,18 @@ Main TypeScript modules under `src/`:
   blocks, and delimiter overrides
   for templates that must preserve Jinja2 `{{ }}` / `{% %}`.
 
-- `scaffold.ts` — flat file-spec DSL. Specs are `{template: {name, content},
-  target, data, opts?}` where templates are Bun text imports. Create renders
-  files; `"red/event": "delete"` removes the same rendered targets and prunes
-  empty parent directories.
+- `scaffold.ts` — flat file-spec DSL. Template specs render Bun text imports;
+  `contentSpec` writes computed content exactly. Delete removes the same targets
+  and prunes empty parent directories. `PRESERVE_JINJA_DELIMITERS` is the shared
+  alternate-delimiter preset.
 
 - `tofu.ts` — event-aware OpenTofu steps. Non-`"delete"` runs `init` + `apply`
   and merges `tofu output -json` under `"tofu/outputs"` by default. `"delete"`
   runs `init` + `destroy`. Backends are `before` advice (`localBackendAdvice`,
   `s3BackendAdvice`, `gcsBackendAdvice`, `r2BackendAdvice`, `backendAdvice`).
-  Commands accept per-run environments; `tofuWithSpec` supports build, and the
+  `conventionalBackendAdvice` supplies package local/S3/R2 policy with explicit
+  directory and state-key functions. Commands accept per-run environments;
+  `tofuWithSpec` supports build, and the
   HCL/JSON construction helpers match Green's deterministic bytes.
 
 - `ansible.ts` — event-aware Ansible steps. Non-`"delete"` runs create playbook,
@@ -108,6 +110,14 @@ Main TypeScript modules under `src/`:
   [--start step] [--end step] [--dry-run]`, loads YAML with `Bun.YAML.parse`,
   overlays `COLORS_PAR_*`, stamps `"red/event"`, and runs the workflow. Exit 2 is
   reserved for usage/config errors.
+
+- `lifecycle.ts` — configurable package preflight with ordered validation and
+  success callbacks.
+
+- `providers.ts` — operations over caller-owned provider registries.
+
+- `process.ts` — inherited-terminal execution, POSIX quoting, and configurable
+  sequential command plans.
 
 - `gates.ts` — Zod schema gates for `before-while`. Gates validate and return
   the original opts; they must never replace opts with parsed output because Zod

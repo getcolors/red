@@ -15,7 +15,10 @@
     "./progress": "./src/progress.ts",
     "./cli": "./src/cli.ts",
     "./runtime": "./src/runtime.ts",
-    "./gates": "./src/gates.ts"
+    "./gates": "./src/gates.ts",
+    "./lifecycle": "./src/lifecycle.ts",
+    "./providers": "./src/providers.ts",
+    "./process": "./src/process.ts"
   },
   "scripts": {
     "test": "bun test",

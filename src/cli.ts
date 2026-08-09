@@ -4,7 +4,7 @@
 // graph.
 
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { Opts, Workflow } from "./workflow.ts";
 import { run } from "./workflow.ts";
@@ -44,22 +44,52 @@ export function readPars(
   }, { ...opts });
 }
 
+export function findUp(name: string, start = process.cwd()): string | undefined {
+  let dir = resolve(start);
+  for (;;) {
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+export function stageDir(
+  opts: Opts, tool: string,
+  config: { defaultWorkdir?: string; defaultProfile?: string; stateFileKey?: string } = {},
+): string {
+  const workdir = String(opts.workdir ?? config.defaultWorkdir ?? ".colors");
+  const stateFile = opts[config.stateFileKey ?? "red/state-file"];
+  const root = !isAbsolute(workdir) && typeof stateFile === "string"
+    ? join(dirname(stateFile), workdir) : workdir;
+  return join(root, String(opts.profile ?? config.defaultProfile ?? "default"), tool);
+}
+
+export interface CliConfig {
+  defaultFile?: string;
+  searchParents?: boolean;
+  allowedEvents?: string[];
+}
+
 // Parse `args`, load the desired state, stamp "red/event", run `workflow`.
 // Returns the final opts map ("red/exit" 2 on usage/state-file errors).
-export async function runCli(workflow: Workflow, args: string[]): Promise<Opts> {
+export async function runCli(workflow: Workflow, args: string[], config: CliConfig = {}): Promise<Opts> {
   try {
     const { values, positionals } = parseArgs({
       args,
       allowPositionals: true,
       options: {
-        file: { type: "string", short: "f", default: "red.yml" },
+        file: { type: "string", short: "f", default: config.searchParents
+          ? findUp(config.defaultFile ?? "red.yml") ?? config.defaultFile ?? "red.yml"
+          : config.defaultFile ?? "red.yml" },
         start: { type: "string" },
         end: { type: "string" },
         "dry-run": { type: "boolean" },
       },
     });
     const event = positionals[0];
-    if (!event) {
+    if (!event || (config.allowedEvents && !config.allowedEvents.includes(event))) {
       return { "red/exit": 2, "red/err": usage };
     }
     if (!existsSync(values.file)) {
@@ -93,14 +123,14 @@ export async function runCli(workflow: Workflow, args: string[]): Promise<Opts> 
 
 // Run and exit the process with "red/exit", printing "red/err" and
 // "red/trace" to stderr. For use from the project's ./red bun script.
-export async function execCli(workflow: Workflow, args: string[] = Bun.argv.slice(2)): Promise<never> {
+export async function execCli(workflow: Workflow, args: string[] = Bun.argv.slice(2), config: CliConfig = {}): Promise<never> {
   // a stray un-awaited rejection cannot be attributed to a branch; report it
   // and fail the process instead of letting the runtime decide
   process.on("unhandledRejection", (reason) => {
     console.error(`unhandled rejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
     process.exit(1);
   });
-  const res = await runCli(workflow, args);
+  const res = await runCli(workflow, args, config);
   if (res["red/err"]) {
     console.error(res["red/err"]);
     if (res["red/trace"]) console.error(res["red/trace"]);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 // the module graph is the classpath: templates travel as text imports
 import ansibleHello from "../test-resources/redtest/ansible-hello.yml" with { type: "text" };
 import hello from "../test-resources/redtest/hello.txt" with { type: "text" };
-import { renderTemplate, scaffold } from "../src/scaffold.ts";
+import { contentSpec, renderTemplate, scaffold } from "../src/scaffold.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "red-scaffold-"));
 
@@ -81,6 +81,13 @@ test("renderer supports if and not-empty with custom delimiters", () => {
   const opts = { tagOpen: "<", tagClose: ">", filterOpen: "{", filterClose: "}" };
   expect(renderTemplate(template, { value: "yes" }, opts)).toBe("yes");
   expect(renderTemplate(template, { value: "" }, opts)).toBe("none");
+});
+
+test("direct content is written exactly", () => {
+  const dir = mkdtempSync(join(tmpdir(), "red-content-"));
+  const target = join(dir, "raw.txt");
+  scaffold({ "red/event": "create" }, [contentSpec(target, "{{ untouched }}\n")]);
+  expect(readFileSync(target, "utf8")).toBe("{{ untouched }}\n");
 });
 
 test("a template without content throws with context", () => {

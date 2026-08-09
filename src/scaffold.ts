@@ -26,11 +26,18 @@ export interface Template {
 // Forwarded to the renderer — tagOpen/tagClose/filterOpen/filterClose
 // override delimiters (single characters, e.g. "<"/">" and "{"/"}" for
 // Ansible files that reserve {{ }}/{% %} for Jinja2).
-export interface Spec {
-  template: Template;
+export const PRESERVE_JINJA_DELIMITERS: RenderOpts = {
+  tagOpen: "<", tagClose: ">", filterOpen: "{", filterClose: "}",
+};
+
+export type Spec = {
   target: string;
-  data: Record<string, unknown>;
+  data?: Record<string, unknown>;
   opts?: RenderOpts;
+} & ({ template: Template; content?: never } | { content: string; template?: never });
+
+export function contentSpec(target: string, content: string): Spec {
+  return { target, content, data: {} };
 }
 
 // Render a template's content with `data`. Optional `opts` are forwarded to
@@ -56,7 +63,7 @@ function pruneEmptyDir(file: string): void {
 }
 
 function targetPath(spec: Spec): string {
-  return render(spec.target, spec.data);
+  return render(spec.target, spec.data ?? {});
 }
 
 function deleteTarget(target: string): void {
@@ -66,7 +73,9 @@ function deleteTarget(target: string): void {
 
 function createTarget(spec: Spec, target: string): void {
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, renderTemplate(spec.template, spec.data, spec.opts));
+  writeFileSync(target, "content" in spec
+    ? spec.content!
+    : renderTemplate(spec.template, spec.data ?? {}, spec.opts));
 }
 
 // Materialize `specs` (create) or remove their targets (delete), driven by

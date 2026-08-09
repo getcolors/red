@@ -8,3 +8,6 @@ export * as progress from "./progress.ts";
 export * from "./cli.ts";
 export * from "./gates.ts";
 export { runtime } from "./runtime.ts";
+export * as lifecycle from "./lifecycle.ts";
+export * as providers from "./providers.ts";
+export * as process from "./process.ts";
