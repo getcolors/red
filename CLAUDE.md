@@ -164,3 +164,13 @@ Main TypeScript modules under `src/`:
   then, document pinned git dependencies via `package.json`; do not recommend
   unpinned Bun auto-install imports.
 - Ignore `node_modules/`, `dist/`, `target/`, and example `work/` directories.
+
+## Documentation
+
+`index.html` is this repository's landing page and carries two analytics tags:
+GA4 measurement ID `G-4VKP1WY4QJ`, whose explicit `page_title` must exactly
+equal the decoded HTML `<title>` and stay distinct and stable so one Analytics
+property can separate repositories, and the self-hosted Rybbit snippet
+`<script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>`,
+which shares one site ID across every page because `getcolors.github.io/<repo>/`
+paths already encode the repository. Never add one tag without the other.
