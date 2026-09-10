@@ -38,9 +38,11 @@ async function spawnExec(cmd: string[], opts: ExecOptions = {}): Promise<ExecRes
     if (timer) clearTimeout(timer);
     if (timedOut) {
       const timeout = `command timed out after ${opts.timeoutMs}ms`;
-      return { exit: -1, out, err: err ? `${err}\n${timeout}` : timeout };
+      return { exit: 124, out, err: err ? `${err}\n${timeout}` : timeout };
     }
-    return { exit, out, err };
+    // Workflow helpers reserve positive codes for failure. Preserve shell
+    // signal status if a runtime reports a negative process return code.
+    return { exit: exit < 0 ? 128 - exit : exit, out, err };
   } catch (e) {
     // command not found and similar spawn failures follow the same shape
     return { exit: 127, out: "", err: e instanceof Error ? e.message : String(e) };
