@@ -268,11 +268,20 @@ function reaches(g: StaticGraph, from: string, to: string): boolean {
 // which is only real if steps cannot mutate their input.
 
 function deepFreeze<T>(x: T, seen = new WeakSet<object>()): T {
-  if (x === null || (typeof x !== "object" && typeof x !== "function")) return x;
+  if (x === null || typeof x !== "object") return x;
   const obj = x as unknown as object;
-  if (seen.has(obj) || Object.isFrozen(obj)) return x;
+  if (seen.has(obj)) return x;
+  if (!Array.isArray(x) && !isPlainMap(x)) {
+    throw new StepError("unsupported mutable step input; use plain objects and arrays");
+  }
   seen.add(obj);
-  for (const v of Object.values(obj)) deepFreeze(v, seen);
+  for (const key of Reflect.ownKeys(obj)) {
+    const descriptor = Object.getOwnPropertyDescriptor(obj, key)!;
+    if (!("value" in descriptor)) {
+      throw new StepError("unsupported accessor in step input; use plain data properties");
+    }
+    deepFreeze(descriptor.value, seen);
+  }
   return Object.freeze(x);
 }
 
@@ -430,12 +439,13 @@ function branchWorstExit(branchOpts: Opts[]): number {
   return Math.max(...branchOpts.map((o) => o["red/exit"] ?? 0));
 }
 
-function firstFailedBranch(branchOpts: Opts[]): Opts | undefined {
-  return branchOpts.find(failed);
-}
-
 function joinForks(entries: LiveEntry[]): ForkFrame[] {
-  return entries.find((e) => e.forks.length > 0)?.forks ?? [];
+  const first = entries[0]?.forks ?? [];
+  let length = 0;
+  while (length < first.length && entries.every((e) => e.forks[length]?.id === first[length]!.id)) {
+    length += 1;
+  }
+  return first.slice(0, length);
 }
 
 function failedJoinResult(
@@ -444,7 +454,7 @@ function failedJoinResult(
   branchOpts: Opts[],
   worst: number,
 ): UnitResult {
-  const bad = firstFailedBranch(branchOpts);
+  const bad = branchOpts.find((o) => (o["red/exit"] ?? 0) === worst);
   return terminalResult(
     {
       ...forkOpts,
@@ -488,11 +498,15 @@ async function runJoinUnit(
 }
 
 function unitBaseOpts(unit: Unit): Opts {
-  return unit.entry?.opts ?? unit.entries?.[0]?.opts ?? {};
+  if (unit.entry) return unit.entry.opts;
+  const entries = unit.entries ?? [];
+  const forks = joinForks(entries);
+  const base = forks.at(-1)?.opts ?? entries[0]?.opts ?? {};
+  return { ...base, "red/branches": entries.map((e) => e.opts) };
 }
 
 function unitForks(unit: Unit): ForkFrame[] {
-  return unit.entry?.forks ?? unit.entries?.[0]?.forks ?? [];
+  return unit.entry ? unit.entry.forks : joinForks(unit.entries ?? []).slice(0, -1);
 }
 
 async function runUnit(wf: Workflow, runOpts: Opts, unit: Unit): Promise<UnitResult> {

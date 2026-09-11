@@ -408,3 +408,121 @@ test("parallel branches actually run concurrently", async () => {
   // branches overlapped in time
   expect(peak).toBeGreaterThan(1);
 });
+
+for (const rightLength of [1, 4]) {
+  for (const enclosingFork of [false, true]) {
+    test(`nested join uses common ancestry with right length ${rightLength}, enclosing fork ${enclosingFork}`, async () => {
+      const graph: Record<string, string[]> = {
+        "t/root": enclosingFork ? ["t/fork", "t/outside"] : ["t/fork"],
+        "t/fork": ["t/left", "t/right1"],
+        "t/left": ["t/leaf1", "t/leaf2"],
+        "t/leaf1": ["t/join"], "t/leaf2": ["t/join"],
+        "t/join": enclosingFork ? ["t/final"] : [],
+        "t/outside": ["t/final"], "t/final": [],
+      };
+      for (let i = 1; i <= rightLength; i++) {
+        graph[`t/right${i}`] = [i === rightLength ? "t/join" : `t/right${i + 1}`];
+      }
+      const joins: Opts[] = [];
+      const result = await run(workflow({ start: "t/root", wireFn: (s) => [
+        (o) => {
+          if (s === "t/join" || s === "t/final") {
+            joins.push({ step: s, base: o.path, branches: o["red/branches"] });
+          }
+          return { ...o, path: [...(o.path ?? []), s] };
+        }, ...graph[s]!,
+      ] }), {});
+      expect(result["red/exit"]).toBe(0);
+      expect(joins[0]!.base).toEqual(["t/root", "t/fork"]);
+      expect(joins[0]!.branches).toHaveLength(3);
+      expect(joins).toHaveLength(enclosingFork ? 2 : 1);
+      if (enclosingFork) {
+        expect(joins[1]!.base).toEqual(["t/root"]);
+        expect(joins[1]!.branches).toHaveLength(2);
+      }
+    });
+  }
+}
+
+test("failure after a nested join does not collapse an already joined fork", async () => {
+  const graph: Record<string, string[]> = {
+    "t/root": ["t/left", "t/right"], "t/left": ["t/a", "t/b"],
+    "t/a": ["t/join"], "t/b": ["t/join"], "t/right": ["t/r2"],
+    "t/r2": ["t/r3"], "t/r3": ["t/join"], "t/join": ["t/fail"], "t/fail": [],
+  };
+  const result = await run(workflow({ start: "t/root", wireFn: (s) => [
+    (o) => s === "t/fail" ? { ...o, "red/exit": 8, "red/err": "after join" }
+      : { ...o, joined: s === "t/join" || o.joined }, ...graph[s]!,
+  ] }), {});
+  expect(result["red/exit"]).toBe(8);
+  expect(result.joined).toBe(true);
+  expect(result["red/branches"]).toHaveLength(3);
+});
+
+for (const exits of [[3, 9], [9, 3], [9, 9]]) {
+  test(`failed join preserves diagnostics for exits ${exits}`, async () => {
+    const result = await run(workflow({ start: "t/root", wireFn: (s) => {
+      if (s === "t/root") return [(o) => o, "t/a", "t/b"];
+      if (s === "t/join") return [() => { throw new Error("join must not execute"); }];
+      const n = s === "t/a" ? 0 : 1;
+      return [(o) => ({ ...o, "red/exit": exits[n], "red/err": `error ${n}`, "red/trace": `trace ${n}` }), "t/join"];
+    }, nextFn: (_s, ns, o) => (ns ?? []).map((n) => [n, o] as const) }), {});
+    const winner = exits[0]! >= exits[1]! ? 0 : 1;
+    expect(result["red/exit"]).toBe(Math.max(...exits));
+    expect(result["red/err"]).toBe(`error ${winner}`);
+    expect(result["red/trace"]).toBe(`trace ${winner}`);
+    expect(result["red/branches"]).toHaveLength(2);
+  });
+}
+
+test("already frozen containers still protect nested step input", async () => {
+  const original = { project: Object.freeze({ nested: { value: "before" } }) };
+  const result = await run(workflow({ start: "t/change", wireFn: () => [(o) => {
+    o.project.nested.value = "after";
+    throw new Error("later failure");
+  }] }), original);
+  expect(result["red/exit"]).toBe(1);
+  expect(original.project.nested.value).toBe("before");
+  expect(result.project.nested.value).toBe("before");
+});
+
+for (const value of [new Map([["key", "before"]]), new Set(["before"]), new Date(), new Uint8Array([1])]) {
+  test(`unsupported ${value.constructor.name} input fails before a step runs`, async () => {
+    let called = false;
+    const result = await run(workflow({ start: "t/change", wireFn: () => [(o) => {
+      called = true;
+      return o;
+    }] }), { project: value });
+    expect(called).toBe(false);
+    expect(result["red/exit"]).toBe(1);
+    expect(result["red/err"]).toContain("unsupported mutable step input");
+  });
+}
+
+test("freezing preserves cyclic data and callable values", async () => {
+  const data: Opts = { value: 1 };
+  data.self = data;
+  const result = await run(workflow({ start: "t/read", wireFn: () => [(o) => ({
+    ...o, value: o.compute(o.data.self.value),
+  })] }), { data, compute: (n: number) => n + 1 });
+  expect(result["red/exit"]).toBe(0);
+  expect(result.value).toBe(2);
+});
+
+test("join routing exceptions preserve common fork context", async () => {
+  const graph: Record<string, string[]> = {
+    "t/root": ["t/left", "t/right"], "t/left": ["t/a", "t/b"],
+    "t/a": ["t/join"], "t/b": ["t/join"], "t/right": ["t/r2"],
+    "t/r2": ["t/r3"], "t/r3": ["t/join"], "t/join": [],
+  };
+  const result = await run(workflow({ start: "t/root", wireFn: (s) => [
+    (o) => ({ ...o, path: [...(o.path ?? []), s] }), ...graph[s]!,
+  ], nextFn: (s, ns, o) => {
+    if (s === "t/join") throw new Error("routing failed");
+    return (ns ?? []).map((n) => [n, o] as const);
+  } }), {});
+  expect(result["red/exit"]).toBe(1);
+  expect(result["red/err"]).toBe("routing failed");
+  expect(result.path).toEqual(["t/root"]);
+  expect(result["red/branches"]).toHaveLength(3);
+});

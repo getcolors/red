@@ -104,7 +104,7 @@
 <tr><td><code>"red/branches"</code></td><td>Array of per-branch result objects at a join or collapsed failed fork. Sort by your own key if order matters.</td></tr>
 <tr><td><code>"red.workflow/inherited"</code></td><td>Private advice-inheritance payload. It is stripped from public step and workflow results.</td></tr>
 </table>
-<div class="note"><strong>Step input is frozen.</strong> The engine deep-freezes opts at each step boundary. Steps should return new objects with spread syntax instead of mutating input. If a step throws, the failure opts are built from the frozen input so partial mutation cannot leak.</div>
+<div class="note"><strong>Step input is frozen.</strong> The engine recursively freezes plain objects and arrays, including nested values in already-frozen containers. Map, Set, Date, typed arrays, custom instances and accessor properties fail before the step runs. Functions remain callable; their captured state is outside this guarantee. Steps should return new objects with spread syntax instead of mutating input. If a step throws, the failure opts are built from the frozen input so partial mutation cannot leak.</div>
 
 <h2 id="steps">3. Steps and errors</h2>
 <p>A step is a plain function <code>(opts) =&gt; opts | Promise&lt;opts&gt;</code>, named by a namespaced string such as <code>"zk/node"</code>. The name anchors wiring, logging, CLI slices, joins, and advice.</p>
@@ -192,7 +192,7 @@ step(subWorkflow, {
 <ul>
   <li><strong>Static fork:</strong> <code>wireFn</code> lists several successors.</li>
   <li><strong>Dynamic fan-out:</strong> <code>nextFn</code> returns several <code>[step, opts]</code> pairs.</li>
-  <li><strong>Join:</strong> branches from different origins that converge on the same step run that step once, using the fork-point opts plus <code>"red/branches"</code>.</li>
+  <li><strong>Join:</strong> branches from different origins that converge on the same step run that step once, using the deepest shared fork's opts plus <code>"red/branches"</code>.</li>
   <li><strong>Same-origin fan-out:</strong> same-step entries from one fan-out parent run independently instead of joining, which is how dynamic N-way item processing works.</li>
   <li><strong>Failure:</strong> a failed branch inside a fork lets siblings finish their current step, collapses the fork, skips the join, and propagates the worst exit with all branch results under <code>"red/branches"</code>.</li>
 </ul>
@@ -231,6 +231,8 @@ const parentWireFn = (step: string) =&gt; {
   }
 };</code></pre>
 <div class="note"><strong>When you don't need <code>step</code>.</strong> If the number of branches is fixed and known at design time, distinct step names work: <code>"deploy/staging"</code> and <code>"deploy/production"</code> never converge, so they run independently without a sub-workflow.</div>
+
+<p>A join consumes the deepest fork shared by all incoming branches and preserves its enclosing forks. Failed joins use the highest exit code and that branch's error and trace. Equal codes select the first incoming branch.</p>
 
 <h2 id="advice">6. Advice</h2>
 <p>Advice wraps step functions without changing graph wiring. Registries are immutable workflow data; adding/removing advice returns a new workflow.</p>
@@ -341,7 +343,7 @@ const provision = (opts: Opts) =&gt;
   <li>Any non-<code>"delete"</code> event runs the create playbook (<code>create.yml</code> by default); <code>"delete"</code> runs the delete playbook (<code>delete.yml</code> by default). Override with <code>playbooks</code>.</li>
   <li>Options map to <code>ansible-playbook</code>: <code>inventory</code>, <code>privateKey</code>, <code>user</code>, <code>extraVars</code> (JSON <code>-e</code>), and <code>hostKeyChecking: false</code> (exports <code>ANSIBLE_HOST_KEY_CHECKING=False</code>).</li>
   <li>On success, PLAY RECAP is parsed into per-host counters under <code>"ansible/recap"</code> by default; override with namespaced <code>recapKey</code>.</li>
-  <li><code>inventoryIni</code> renders deterministic INI from <code>{group: {hosts: [{name, vars}], vars}}</code>.</li>
+  <li><code>inventoryIni</code> renders deterministic INI from <code>{group: {hosts: [{name, vars}], vars}}</code>. Strings preserve whitespace, quotes, backslashes and literal-looking values such as <code>"123"</code>. Host values include shell quoting around their Python literal; group values use the literal directly.</li>
   <li><code>inventoryAdvice</code> is a <code>before</code> advice that writes an inventory file from data or a function of opts, mirroring OpenTofu backend advice.</li>
   <li><code>ansibleWithSpec</code> scaffolds then runs on create, and runs then removes scaffolded files on delete.</li>
 </ul>

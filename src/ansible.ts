@@ -133,10 +133,39 @@ export async function ansibleWithSpec(
 
 // --- inventory ---------------------------------------------------------------
 
-function iniVars(vars: Record<string, unknown> | undefined): string[] {
+function pythonLiteral(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null) return "None";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) return `[${value.map(pythonLiteral).join(",")}]`;
+  if (typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype) {
+    return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([k, v]) => `${JSON.stringify(k)}:${pythonLiteral(v)}`).join(",")}}`;
+  }
+  throw new Error("inventory variables require finite numbers or JSON-compatible values");
+}
+
+function groupValue(value: unknown): string {
+  // Both inventory forms evaluate Python literals. Preserve ordinary names,
+  // paths, and IPv4 addresses; quote other strings to retain their type.
+  if (typeof value === "string" && (
+    /^[A-Za-z_/@][A-Za-z0-9_./:@%+-]*$/.test(value) && !["True", "False", "None"].includes(value)
+    || /^[0-9]+(?:\.[0-9]+){3}$/.test(value)
+  )) return value;
+  return pythonLiteral(value);
+}
+
+function hostValue(value: unknown): string {
+  // Host lines also pass through shlex before Python literal evaluation.
+  const literal = groupValue(value);
+  return /^[\w@%+=:,./-]+$/.test(literal) ? literal : "'" + literal.replaceAll("'", "'\"'\"'") + "'";
+}
+
+function iniVars(vars: Record<string, unknown> | undefined, group = false): string[] {
   return Object.entries(vars ?? {})
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${k}=${v}`);
+    .map(([k, v]) => `${k}=${group ? groupValue(v) : hostValue(v)}`);
 }
 
 export interface InventoryHost {
@@ -156,7 +185,7 @@ function hostLine(host: InventoryHost): string {
 function groupSection([group, { hosts, vars }]: [string, InventoryGroup]): string {
   const hostEntries = [...hosts].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const lines = `[${group}]\n${hostEntries.map((h) => `${hostLine(h)}\n`).join("")}`;
-  const varEntries = iniVars(vars);
+  const varEntries = iniVars(vars, true);
   if (varEntries.length === 0) return lines;
   return `${lines}\n[${group}:vars]\n${varEntries.map((v) => `${v}\n`).join("")}`;
 }

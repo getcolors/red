@@ -39,10 +39,16 @@ steps read the keys they declare and pass everything else through untouched.
 Per-step contracts are expressed as Zod schemas where wanted (`z.infer` types
 the step's reads); there is deliberately no closed "all keys" interface.
 
-The engine **deep-freezes opts at the step boundary**. This is not hygiene —
-the error model guarantees that a throwing step's partial work is discarded
-(failure opts are built from the step's *input*), and that guarantee is only
-real if steps cannot mutate their input. Steps return new objects (spread).
+The engine recursively freezes plain objects and arrays at each step boundary,
+including nested values inside already-frozen containers. Map, Set, Date,
+typed arrays, custom object instances and accessor properties fail before the
+step runs. Functions remain callable; their captured state is outside the input
+freezing contract. Steps return new objects using spread syntax.
+
+A join uses the deepest fork shared by all incoming branches, consumes that
+fork and preserves its enclosing forks. Failed joins carry the highest exit
+code and that branch's error and trace. Equal codes select the first incoming
+branch.
 
 ## Steps, wiring, workflows
 

@@ -194,3 +194,28 @@ test("extra vars, user, key, and host-key-checking shape the command", async () 
   ]);
   expect(seenEnv).toEqual({ ANSIBLE_HOST_KEY_CHECKING: "False" });
 });
+
+test("inventory quotes host and group values separately", () => {
+  expect(inventoryIni({web: {
+    hosts: [{name: "localhost", vars: {path: "/tmp/my keys/id", count: 3, text: "123", enabled: true}}],
+    vars: {path: "/tmp/my keys/id", text: "123", enabled: true},
+  }})).toBe('[web]\nlocalhost count=3 enabled=True path=\'"/tmp/my keys/id"\' text=\'"123"\'\n' +
+    '\n[web:vars]\nenabled=True\npath="/tmp/my keys/id"\ntext="123"\n');
+});
+
+test.skipIf(!Bun.which("ansible-inventory"))("inventory round trips through Ansible", async () => {
+  const values = {
+    path: "/tmp/my keys/id_ed25519", quote: "he said \"it's ready\"", backslash: "C:\\keys\\new",
+    comment: "#hash; value", empty: "", numeric_string: "123", boolean_string: "False", null_string: "None",
+    boolean: true, number: 3, null: null, unicode: "café", whitespace: " surrounding whitespace ",
+    newline: "first\nsecond", nested: {a: [1, false, "x y"]},
+  };
+  const prefixed = (prefix: string) => Object.fromEntries(Object.entries(values).map(([k, v]) => [`${prefix}_${k}`, v]));
+  const file = join(tmp(), "inventory.ini");
+  writeFileSync(file, inventoryIni({web: {hosts: [{name: "localhost", vars: prefixed("host")}], vars: prefixed("group")}}));
+  const proc = Bun.spawn(["ansible-inventory", "-i", file, "--list"], {stdout: "pipe", stderr: "pipe"});
+  const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  expect(exit).toBe(0);
+  expect(err).not.toContain("Failed to parse");
+  expect(JSON.parse(out)._meta.hostvars.localhost).toEqual({...prefixed("host"), ...prefixed("group")});
+});
