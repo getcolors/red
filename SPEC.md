@@ -191,6 +191,12 @@ Event-aware helper steps:
 - All subprocesses go through one seam: `runtime.exec(cmd, {cwd, env, timeoutMs})`.
   Results use zero for success and positive codes for failure: signal statuses
   follow `128 + signal`, timeouts return 124, and spawn failures return 127.
+  On POSIX, timed commands run in a separate process group and timeout kills
+  that group, including children whose original parent has already exited.
+  On Windows, timeout requests tree termination with `taskkill /T /F`.
+  Timeout cleanup waits at most one additional second for exit and output.
+  Descendants that deliberately leave the POSIX group cannot be killed through
+  that group, but cannot keep the timeout waiting on inherited output pipes.
   Tests stub `runtime.exec`; it is also the natural hook for future recording
   features.
 

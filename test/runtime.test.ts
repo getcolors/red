@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runtime } from "../src/runtime.ts";
@@ -29,6 +29,68 @@ test("real timeout reports positive failure", async () => {
   expect(result.exit).toBe(124);
   expect(failed({ "red/exit": result.exit })).toBe(true);
   expect(result.err).toContain("command timed out after 100ms");
+});
+
+for (const parentExits of [false, true]) {
+  test.skipIf(process.platform === "win32")(`timeout kills descendants when parent ${parentExits ? "exits" : "waits"}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "red-runtime-tree-"));
+    const marker = join(root, "survived");
+    const pidFile = join(root, "child.pid");
+    const child = `
+      await Bun.write(${JSON.stringify(pidFile)}, String(process.pid));
+      console.log("child started");
+      console.error("child stderr");
+      await Bun.sleep(1000);
+      await Bun.write(${JSON.stringify(marker)}, "survived");
+      await Bun.sleep(10000);
+    `;
+    try {
+      const start = performance.now();
+      const result = await runtime.exec([process.execPath, "-e", `
+        Bun.spawn([process.execPath, "-e", ${JSON.stringify(child)}], {
+          stdin: "ignore", stdout: "inherit", stderr: "inherit",
+        });
+        ${parentExits ? "process.exit(0)" : "await Bun.sleep(10000)"};
+      `], { timeoutMs: 300 });
+      expect(performance.now() - start).toBeLessThan(900);
+      expect(result.exit).toBe(124);
+      expect(result.out).toContain("child started");
+      expect(result.err).toContain("child stderr");
+      expect(result.err).toContain("command timed out after 300ms");
+      await Bun.sleep(1100);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (existsSync(pidFile)) {
+        try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {}
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test.skipIf(process.platform === "win32")("timeout bounds pipe cleanup when a descendant leaves the process group", async () => {
+  const root = mkdtempSync(join(tmpdir(), "red-runtime-escaped-"));
+  const pidFile = join(root, "child.pid");
+  try {
+    const start = performance.now();
+    const result = await runtime.exec([process.execPath, "-e", `
+      const child = Bun.spawn([process.execPath, "-e", "await Bun.sleep(10000)"], {
+        detached: true, stdin: "ignore", stdout: "inherit", stderr: "inherit",
+      });
+      await Bun.write(${JSON.stringify(pidFile)}, String(child.pid));
+      console.log("parent output");
+      await Bun.sleep(10000);
+    `], { timeoutMs: 300 });
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(result.exit).toBe(124);
+    expect(result.out).toContain("parent output");
+    expect(result.err).toContain("command timed out after 300ms");
+  } finally {
+    if (existsSync(pidFile)) {
+      try { process.kill(-Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {}
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 for (const mode of ["signal", "timeout"]) {
