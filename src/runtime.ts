@@ -93,7 +93,24 @@ async function spawnExec(cmd: string[], opts: ExecOptions = {}): Promise<ExecRes
   }
 }
 
+async function spawnInherit(cmd: string[], opts: ExecOptions = {}): Promise<ExecResult> {
+  try {
+    const proc = Bun.spawn(cmd, {
+      cwd: opts.cwd,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exit = await proc.exited;
+    return { exit: exit < 0 ? 128 - exit : exit, out: "", err: "" };
+  } catch (error) {
+    return { exit: 127, out: "", err: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export const runtime = {
   exec: spawnExec as (cmd: string[], opts?: ExecOptions) => Promise<ExecResult>,
+  execInherit: spawnInherit as (cmd: string[], opts?: ExecOptions) => Promise<ExecResult>,
   log: ((...args: unknown[]) => console.log(...args)) as (...args: unknown[]) => void,
 };

@@ -123,9 +123,11 @@ Main TypeScript modules under `src/`:
   the original opts; they must never replace opts with parsed output because Zod
   can strip unrelated namespace keys.
 
-- `runtime.ts` — mutable test seam for subprocesses and log lines. All command
-  execution goes through `runtime.exec`, with per-command environments and
-  timeouts; tests stub it instead of shelling out.
+- `runtime.ts` provides mutable methods for subprocesses and log lines.
+  Captured commands use `runtime.exec`; inherited terminal commands use
+  `runtime.execInherit`. Both support per-command environments, return 127
+  for spawn failures, and normalize negative signal statuses to `128 + signal`.
+  Only captured execution supports timeouts. Tests can stub either method.
 
 ## Examples
 

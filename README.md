@@ -126,6 +126,12 @@ import { runtime } from "red/runtime";
 
 The root export (`red`) re-exports the public API and namespaces.
 
+`runtime.exec` captures subprocess output. `runInherit` from `red/process`
+delegates to the mutable `runtime.execInherit` method and inherits terminal
+streams. Both preserve ordinary exit codes, return 127 for spawn failures,
+and convert negative signal statuses to `128 + signal`. Both accept `cwd`
+and `env`; only `runtime.exec` supports `timeoutMs`.
+
 ## Examples
 
 Each example's `./red` is a self-contained Bun script that imports this library

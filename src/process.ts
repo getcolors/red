@@ -3,11 +3,7 @@ import { runtime, type ExecOptions, type ExecResult } from "./runtime.ts";
 export function posixQuote(value: unknown): string { return `'${String(value).replaceAll("'", "'\\''")}'`; }
 
 export async function runInherit(args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
-  try {
-    const proc = Bun.spawn(args, { cwd: opts.cwd, env: opts.env ? { ...process.env, ...opts.env } : process.env,
-      stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    return { exit: await proc.exited, out: "", err: "" };
-  } catch (error) { return { exit: -1, out: "", err: error instanceof Error ? error.message : String(error) }; }
+  return runtime.execInherit(args, opts);
 }
 
 export interface PlanCommand { label: string; args: string[]; options?: ExecOptions }
