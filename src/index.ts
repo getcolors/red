@@ -11,3 +11,4 @@ export { runtime } from "./runtime.ts";
 export * as lifecycle from "./lifecycle.ts";
 export * as providers from "./providers.ts";
 export * as process from "./process.ts";
+export * as kubernetes from "./kubernetes.ts";

@@ -177,3 +177,9 @@ zk/servers:
 
 Quote version-like values such as `"3.10"`; YAML would otherwise parse them as
 numbers.
+
+## Kubernetes controllers
+
+`red/kubernetes` and `red/kubernetes/client` provide bounded polling workers, state-identity locks,
+optimistic status writes, finalization, and explicit-context kubectl transport.
+See the [controller contract](docs/kubernetes.md) for callbacks and lifecycle rules.

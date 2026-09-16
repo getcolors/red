@@ -18,7 +18,9 @@
     "./gates": "./src/gates.ts",
     "./lifecycle": "./src/lifecycle.ts",
     "./providers": "./src/providers.ts",
-    "./process": "./src/process.ts"
+    "./process": "./src/process.ts",
+    "./kubernetes": "./src/kubernetes.ts",
+    "./kubernetes/client": "./src/kubernetes/client.ts"
   },
   "scripts": {
     "test": "bun test",
