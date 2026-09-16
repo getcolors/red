@@ -308,7 +308,8 @@ export async function reconcile(
 ): Promise<"busy" | undefined> {
   const r = await c.client.getResource(p.resource, namespace, name);
   if (!r || !due(c, r)) return;
-  const key = identityKey(await p.identity(options(r)));
+  const identity = await p.identity(options(r));
+  const key = identityKey(identity);
   if (held.has(key)) return "busy";
   held.add(key);
   try {
@@ -325,7 +326,7 @@ export async function reconcile(
         latest,
         options(latest),
         createHash("sha256")
-          .update(identityText(await p.identity(options(latest))))
+          .update(identityText(identity))
           .digest("hex"),
       );
   } finally {

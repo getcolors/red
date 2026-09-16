@@ -94,6 +94,19 @@ function fixture() {
     run: () => k.reconcile(cfg, p, "dev", "demo"),
   };
 }
+test("status records the identity used to acquire the lock", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.p.identity = () =>
+    ++reads === 1
+      ? { backend: "s3", profile: "demo" }
+      : { profile: "demo", backend: "s3" };
+  await f.run();
+  expect(f.r.status?.phase).toBe("Ready");
+  expect(f.r.status?.stateIdentity).toBe(
+    "b31cd38f9fcf4d1acda385fd2fbef1167dc22a1d8945ac71aa45a974aae6b144",
+  );
+});
 test("convergence, drift, stopped state, suspension, requests", async () => {
   const f = fixture();
   await f.run();
