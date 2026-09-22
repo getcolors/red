@@ -6,6 +6,7 @@
   "license": "EPL-1.0",
   "exports": {
     ".": "./src/index.ts",
+    "./scope": "./src/scope.ts",
     "./workflow": "./src/workflow.ts",
     "./advice": "./src/advice.ts",
     "./scaffold": "./src/scaffold.ts",

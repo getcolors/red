@@ -86,6 +86,8 @@ export interface AnsibleConfig {
   hostKeyChecking?: boolean;
   // namespaced key for the parsed recap
   recapKey?: string;
+  env?: Record<string, string | undefined>;
+  secretEnv?: string[];
 }
 
 // Run `ansible-playbook` in `dir` according to "red/event" (see `playbook`).
@@ -103,7 +105,9 @@ export async function ansibleStep(opts: Opts, config: AnsibleConfig): Promise<Op
     recapKey = "ansible/recap",
   } = config;
   const pb = playbook(opts, playbooks);
-  const env = hostKeyChecking === false ? { ANSIBLE_HOST_KEY_CHECKING: "False" } : undefined;
+  const env: Record<string, string | undefined> = {...config.env};
+  for (const name of [...Object.keys({...process.env, ...config.env}).filter(k => k.startsWith("COLORS_PAR_")), ...(config.secretEnv ?? [])]) env[name] = undefined;
+  if (hostKeyChecking === false) env.ANSIBLE_HOST_KEY_CHECKING = "False";
   const args = ["-i", inventory];
   if (privateKey) args.push("--private-key", String(privateKey));
   if (user) args.push("-u", user);

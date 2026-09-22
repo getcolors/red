@@ -620,7 +620,10 @@ async function schedulerStep(
   const readySet = new Set(ready);
   const waiting = Object.keys(byStep).filter((s) => !readySet.has(s));
   const units = ready.flatMap((s) => stepUnits(s, byStep[s]!));
-  const results = await Promise.all(units.map((u) => runUnit(wf, runOpts, u)));
+  const settled = await Promise.allSettled(units.map((u) => runUnit(wf, runOpts, u)));
+  const failure = settled.find((r) => r.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+  const results = settled.map((r) => (r as PromiseFulfilledResult<Awaited<ReturnType<typeof runUnit>>>).value);
   return collapseDoomed(
     [...waiting.flatMap((s) => byStep[s]!), ...results.flatMap((r) => r.newEntries ?? [])],
     [...finished, ...results.flatMap((r) => r.terminals ?? [])],

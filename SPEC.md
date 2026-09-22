@@ -265,3 +265,8 @@ Bun launchers under `examples/*/red` with desired state in `red.yml`. The
 library's own `package.json` exists for publication and the zod dependency;
 consumers' launcher scripts need none once red is available as a version-pinned
 package import.
+
+## Runtime resource scopes
+
+`red/scope` exports `withScope` for ordered process/resource finalization.
+See [resource scopes](docs/resource-scopes.md).
