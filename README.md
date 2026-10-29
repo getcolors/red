@@ -2,8 +2,8 @@
 
 `red` is a TypeScript/Bun library for building idempotent devops CLIs:
 desired state in YAML, workflows as step graphs threaded by one plain object,
-Selmer-style template scaffolding, OpenTofu for infrastructure, and Ansible for
-SSH provisioning.
+Selmer-style template scaffolding, and optional event-aware OpenTofu and
+Ansible steps — a package can use them, but does not need them.
 
 The full behavioral contract is in [`SPEC.md`](SPEC.md).
 

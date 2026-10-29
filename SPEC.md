@@ -3,7 +3,7 @@
 `red` is the TypeScript/Bun implementation of the green workflow model: a
 library for building idempotent devops CLIs — desired state in YAML, workflows
 as step graphs threaded by a plain object, template-scaffolded config files,
-OpenTofu and Ansible as the muscle.
+and optional event-aware OpenTofu and Ansible steps — a package can use them, but does not need them.
 
 The port is **behavioral**: green is the canonical model, and the TypeScript
 test suite locks that behavior into red's language-specific contract.

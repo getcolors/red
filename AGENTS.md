@@ -6,8 +6,8 @@ This file gives coding-agent guidance for this repository.
 
 `red` is a TypeScript/Bun library for building idempotent devops CLIs: desired
 state in YAML, workflows as step graphs threaded by one plain object,
-Selmer-style template-scaffolded config files, OpenTofu as the infrastructure
-runner, and Ansible for SSH provisioning.
+Selmer-style template-scaffolded config files, and optional event-aware
+OpenTofu and Ansible steps — a package can use them, but does not need them.
 
 The behavioral contract lives in `SPEC.md`. This repository now contains the
 TypeScript/Bun implementation only; do not add new Clojure/Babashka source,
