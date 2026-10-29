@@ -137,20 +137,20 @@ test("wireFn can select an event-specific static graph", async () => {
         case "create t/start":
           return [mark("start"), "t/node"];
         case "create t/node":
-          return [mark("node"), "t/ansible"];
-        case "create t/ansible":
-          return [mark("ansible")];
+          return [mark("node"), "t/config"];
+        case "create t/config":
+          return [mark("config")];
         case "delete t/start":
-          return [mark("start"), "t/ansible"];
-        case "delete t/ansible":
-          return [mark("ansible"), "t/node"];
+          return [mark("start"), "t/config"];
+        case "delete t/config":
+          return [mark("config"), "t/node"];
         case "delete t/node":
           return [mark("node")];
       }
     },
   });
-  expect((await run(w, { "red/event": "create" })).seen).toEqual(["start", "node", "ansible"]);
-  expect((await run(w, { "red/event": "delete" })).seen).toEqual(["start", "ansible", "node"]);
+  expect((await run(w, { "red/event": "create" })).seen).toEqual(["start", "node", "config"]);
+  expect((await run(w, { "red/event": "delete" })).seen).toEqual(["start", "config", "node"]);
 });
 
 test("wireFn uses stable run-opts, not branch opts", async () => {

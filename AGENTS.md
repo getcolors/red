@@ -4,59 +4,43 @@ This file gives coding-agent guidance for this repository.
 
 ## What this is
 
-`red` is a TypeScript/Bun library for building idempotent devops CLIs: desired
-state in YAML, workflows as step graphs threaded by one plain object,
-Selmer-style template-scaffolded config files, and optional event-aware
-OpenTofu and Ansible steps — a package can use them, but does not need them.
+`red` is the TypeScript/Bun workflow SDK of Colors, one of three SDKs that
+share one model: green (Clojure/Babashka, canonical), red (TypeScript/Bun) and
+blue (Python/uv). Steps are `opts -> opts`; a workflow is a static `wireFn`
+graph plus a dynamic `nextFn` with fan-out and joins; advice is layered;
+desired state is YAML overlaid with `COLORS_PAR_*`; dry-run, progress and
+lifecycle preflight are optional. red is a foundation for deployment code
+written by coding agents; PocketDeploy
+(<https://github.com/pocketcontext/pocketdeploy>, built on blue) is the
+starter package. Steps call cloud CLIs or APIs directly — red has no
+OpenTofu/Ansible integration, template scaffolding or subprocess runner, and
+must not grow them back.
 
-The behavioral contract lives in `SPEC.md`. This repository now contains the
-TypeScript/Bun implementation only; do not add new Clojure/Babashka source,
-tests, build tasks, or example launchers.
+The behavioral contract lives in `SPEC.md`; `index.html` publishes the same
+spec at <https://getcolors.github.io/red/>. Keep the three in step. This
+repository contains the TypeScript/Bun implementation only; do not add
+Clojure/Babashka source, tests, build tasks, or launchers.
 
 ## Commands
 
 ```sh
-bun install          # install dependencies
-bun test             # run the TypeScript test suite
+bun install          # install dev dependencies (red has no runtime deps)
+bun test             # run the test suite, including the example
 bun run typecheck    # run tsc --noEmit
 ```
 
-The ZooKeeper end-to-end tests drive real `tofu` over HCL containing only
-`locals`/`output` blocks and skip when `tofu` is not on `PATH`. The real floci
-example test is opt-in: `RED_FLOCI_E2E=1 bun test test/floci-zookeeper.test.ts`.
-
-Try examples end-to-end:
+Try the example end-to-end (offline, harmless):
 
 ```sh
-cd examples/zookeeper
+cd examples/hello
 ./red create --dry-run
-./red create
-./red delete
-
-cd ../multi-zookeeper
-./red create --dry-run
-./red create
-./red delete
-
-cd ../once
-./red create --dry-run
-./red create
-./red delete
-
-cd ../multi-once
-./red create --dry-run   # offline path; real create needs a real S3 bucket
-./red create
-./red delete
-
-cd ../floci-zookeeper
-./red create --dry-run   # offline path; real create needs Linux + Docker + floci
 ./red create
 ./red delete
 ```
 
 ## Architecture
 
-Main TypeScript modules under `src/`:
+Modules under `src/`:
 
 - `workflow.ts` — workflow engine. A step is `(opts) => opts | Promise<opts>`
   named by a namespaced string. `wireFn(step, runOpts)` defines the static graph
@@ -77,80 +61,37 @@ Main TypeScript modules under `src/`:
   newest-outermost ordering. Advice is inherited through embedded workflows by
   flat step name; same-id ancestor advice replaces child advice.
 
-- `renderer.ts` — small internal Selmer-compatible renderer used by scaffolding.
-  Supports variables, dotted paths, missing values as empty, HTML escaping by
-  default, `safe`, `not-empty`, `sort(attribute='...')`, `for` loops, `if`
-  blocks, and delimiter overrides
-  for templates that must preserve Jinja2 `{{ }}` / `{% %}`.
-
-- `scaffold.ts` — flat file-spec DSL. Template specs render Bun text imports;
-  `contentSpec` writes computed content exactly. Delete removes the same targets
-  and prunes empty parent directories. `PRESERVE_JINJA_DELIMITERS` is the shared
-  alternate-delimiter preset.
-
-- `tofu.ts` — event-aware OpenTofu steps. Non-`"delete"` runs `init` + `apply`
-  and merges `tofu output -json` under `"tofu/outputs"` by default. `"delete"`
-  runs `init` + `destroy`. Backends are `before` advice (`localBackendAdvice`,
-  `s3BackendAdvice`, `gcsBackendAdvice`, `r2BackendAdvice`, `backendAdvice`).
-  `conventionalBackendAdvice` supplies package local/S3/R2 policy with explicit
-  directory and state-key functions. Commands accept per-run environments;
-  `tofuWithSpec` supports build, and the
-  HCL/JSON construction helpers match Green's deterministic bytes.
-
-- `ansible.ts` — event-aware Ansible steps. Non-`"delete"` runs create playbook,
-  `"delete"` runs delete playbook. Parses PLAY RECAP under `"ansible/recap"` by
-  default. `inventoryAdvice` writes deterministic INI inventories.
-
-- `dry-run.ts` — dry-run advice. `dryRun.advise(wf, steps)` adds around advice
-  that logs and skips listed steps when `"red/dry-run"` is true.
-
-- `progress.ts` — all-step progress advice logging entry/exit timings.
-
 - `cli.ts` — `runCli` / `execCli`: parses `./red <event> [-f red.yml]
   [--start step] [--end step] [--dry-run]`, loads YAML with `Bun.YAML.parse`,
-  overlays `COLORS_PAR_*`, stamps `"red/event"`, and runs the workflow. Exit 2 is
-  reserved for usage/config errors.
+  overlays `COLORS_PAR_*` (`readPars`, `parName`), stamps `"red/event"` and
+  `"red/state-file"`, and runs the workflow. `findUp` supports
+  `searchParents`. Exit 2 is reserved for usage/config errors.
 
-- `lifecycle.ts` — configurable package preflight with ordered validation and
-  success callbacks.
+- `lifecycle.ts` — `preflight`: defaults, optional overlay, ordered
+  validators (errors → exit 2) and an `afterValidate` callback.
 
-- `providers.ts` — operations over caller-owned provider registries.
+- `dry-run.ts` — `dryRun.advise(wf, steps)` adds around advice that logs and
+  skips listed steps when `"red/dry-run"` is true.
 
-- `process.ts` — inherited-terminal execution, POSIX quoting, and configurable
-  sequential command plans.
+- `progress.ts` — all-step around advice logging entry/exit timings.
 
-- `gates.ts` — Zod schema gates for `before-while`. Gates validate and return
-  the original opts; they must never replace opts with parsed output because Zod
-  can strip unrelated namespace keys.
+- `runtime.ts` — the mutable `runtime.log` seam used by dry-run and progress so
+  tests can capture output. There is no subprocess runner; steps spawn
+  commands themselves.
 
-- `runtime.ts` provides mutable methods for subprocesses and log lines.
-  Captured commands use `runtime.exec`; inherited terminal commands use
-  `runtime.execInherit`. Both support per-command environments, return 127
-  for spawn failures, and normalize negative signal statuses to `128 + signal`.
-  Only captured execution supports timeouts. Tests can stub either method.
+## Example
 
-## Examples
-
-- `examples/zookeeper` — fake 3-node cluster: dynamic fan-out/join, scaffold +
-  tofu, backend-as-advice, dry-run.
-- `examples/multi-zookeeper` — two fake clusters from one embedded workflow;
-  inherited parent advice reaches child step names.
-- `examples/once` — ONCE-style single VPS with provider-swap advice,
-  `compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`, and
-  scaffold-only Ansible config.
-- `examples/multi-once` — many ONCE boxes from one workflow; parent swaps
-  provider/backend advice by inherited id and uses S3 backend keys per
-  deployment + step. Real create needs a real S3 bucket; dry-run is offline.
-- `examples/floci-zookeeper` — real local 3-node ZooKeeper on floci. Linux-only
-  for non-dry-run because it connects directly to Docker-bridge IPs. Requires a
-  floci container named `floci`, `tofu`, `ansible-playbook`, `docker`, and
-  `aws`. Dry-run works offline and should touch nothing.
+- `examples/hello` — steps call `uname`, `mkdir`, `cat`, `rm` directly;
+  lifecycle preflight, `nextFn` fan-out per name, a join, progress and dry-run
+  advice, `COLORS_PAR_*` overrides. `test/hello-example.test.ts` drives the
+  real launcher; keep it passing when changing the example or the CLI.
 
 ## Conventions
 
 - All cross-step state is one open `Opts` object. Engine keys are `red/*` and
   private `red.*/*`; project/library keys should be namespace-like strings such
-  as `"zk/servers"`, `"once/workdir"`, `"tofu/outputs"`.
+  as `"app/servers"`. Desired-state inputs that may be overridden by
+  `COLORS_PAR_*` stay flat kebab-case.
 - Keep public constructors and advice-transforming functions pure. Return new
   workflow values; do not mutate existing workflows.
 - Steps should return new objects (`{...opts, ...}`), not mutate input. The
@@ -158,10 +99,8 @@ Main TypeScript modules under `src/`:
 - Errors are opts values, not exceptions escaping the engine. Throw `StepError`
   only when a step/advice wants the step boundary to convert it to
   `"red/exit"`/`"red/err"`/`"red/trace"`.
-- Keep output keys namespaced (`"my.ns/result"`); never merge provider outputs
-  into top-level opts by default.
-- Scaffolding templates should be imported as text and passed as `{name,
-  content}`. There is no runtime template lookup.
+- Keep output keys namespaced (`"my.ns/result"`); never merge command or API
+  outputs into top-level opts by default.
 - For consumer docs, prefer version-pinned npm specifiers once published. Until
   then, document pinned git dependencies via `package.json`; do not recommend
   unpinned Bun auto-install imports.
@@ -176,3 +115,8 @@ property can separate repositories, and the self-hosted Rybbit snippet
 `<script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>`,
 which shares one site ID across every page because `getcolors.github.io/<repo>/`
 paths already encode the repository. Never add one tag without the other.
+
+The page is styled like www.getcolors.ai (IBM Plex Sans/Mono, the shared
+`oklch` tokens, the site's sticky header and footer) and matches the green and
+blue pages; only `--accent` differs (`var(--red)` here). Keep it light-only,
+free of horizontal scroll at phone width, and accurate to `SPEC.md`.

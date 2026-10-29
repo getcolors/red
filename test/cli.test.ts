@@ -105,9 +105,9 @@ test("no colour keeps a prefix of its own", () => {
 test("namespaced keys and YAML 1.2 semantics survive the load", async () => {
   const wf = workflow({
     start: "t/a",
-    wireFn: () => [(o: Opts) => ({ ...o, probe: [o["zk/workdir"], o.answer] })],
+    wireFn: () => [(o: Opts) => ({ ...o, probe: [o["app/workdir"], o.answer] })],
   });
-  const res = await runCli(wf, ["create", "-f", stateFile("zk/workdir: work\nanswer: no")]);
-  // zk/workdir parses unquoted; `no` is the string "no", not false
+  const res = await runCli(wf, ["create", "-f", stateFile("app/workdir: work\nanswer: no")]);
+  // app/workdir parses unquoted; `no` is the string "no", not false
   expect(res.probe).toEqual(["work", "no"]);
 });

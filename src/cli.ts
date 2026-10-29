@@ -4,7 +4,7 @@
 // graph.
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { Opts, Workflow } from "./workflow.ts";
 import { run } from "./workflow.ts";
@@ -53,17 +53,6 @@ export function findUp(name: string, start = process.cwd()): string | undefined 
     if (parent === dir) return undefined;
     dir = parent;
   }
-}
-
-export function stageDir(
-  opts: Opts, tool: string,
-  config: { defaultWorkdir?: string; defaultProfile?: string; stateFileKey?: string } = {},
-): string {
-  const workdir = String(opts.workdir ?? config.defaultWorkdir ?? ".colors");
-  const stateFile = opts[config.stateFileKey ?? "red/state-file"];
-  const root = !isAbsolute(workdir) && typeof stateFile === "string"
-    ? join(dirname(stateFile), workdir) : workdir;
-  return join(root, String(opts.profile ?? config.defaultProfile ?? "default"), tool);
 }
 
 export interface CliConfig {

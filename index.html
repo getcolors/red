@@ -4,36 +4,110 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>red — specification</title>
+<meta name="description" content="Specification of red, the TypeScript/Bun workflow SDK of Colors: steps as opts -> opts functions, a wireFn graph with a dynamic nextFn, layered advice, and YAML desired state with COLORS_PAR_* overrides.">
+<link rel="icon" href="https://www.getcolors.ai/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
   :root {
     color-scheme: light;
-    --bg: #faf7f7; --fg: #241f1f; --muted: #6a5d5d; --accent: #b42318;
-    --card: #ffffff; --border: #ead9d7; --code-bg: #f6eeee; --code-fg: #2d2020;
-    --th-bg: #f3e8e6;
+    --ink: oklch(20% 0.01 260);
+    --code-ink: oklch(35% 0.01 260);
+    --muted: oklch(45% 0.01 260);
+    --soft: oklch(55% 0.01 260);
+    --line: oklch(91% 0.005 260);
+    --page: oklch(99% 0.002 90);
+    --surface: oklch(97.5% 0.003 260);
+    --panel: oklch(97% 0.005 260);
+    --red: oklch(60% 0.19 25);
+    --green: oklch(65% 0.17 145);
+    --blue: oklch(55% 0.18 260);
+    --accent: var(--red);
+    --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+    --sans: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 0 1rem 4rem; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
-  main { max-width: 56rem; margin: 0 auto; }
-  h1 { font-size: 2.2rem; margin: 2.5rem 0 0; letter-spacing: -0.02em; }
-  h1 .v { color: var(--muted); font-size: 1rem; font-weight: 400; margin-left: .75rem; }
-  p.tagline { color: var(--muted); margin-top: .35rem; font-size: 1.1rem; }
-  h2 { font-size: 1.45rem; margin: 2.75rem 0 .75rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
-  h3 { font-size: 1.1rem; margin: 1.75rem 0 .5rem; }
-  a { color: var(--accent); }
-  code, pre { font: 0.875em/1.55 "SF Mono", ui-monospace, Menlo, Consolas, monospace; background: var(--code-bg); color: var(--code-fg); border-radius: 5px; }
-  code { padding: .12em .35em; }
-  pre { padding: .9rem 1.1rem; overflow-x: auto; border: 1px solid var(--border); }
-  pre code { padding: 0; background: none; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
-  th, td { text-align: left; padding: .5rem .75rem; border: 1px solid var(--border); vertical-align: top; }
-  th { background: var(--th-bg); font-weight: 600; }
-  td code { white-space: nowrap; }
-  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0; }
-  .toc ol { margin: .25rem 0; padding-left: 1.25rem; }
-  .note { border-left: 3px solid var(--accent); background: var(--card); padding: .65rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0; }
-  .note strong:first-child { color: var(--accent); }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.6 var(--sans); overflow-wrap: break-word; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { color: oklch(45% 0.18 260); text-decoration: underline; }
+
+  /* Header, as on www.getcolors.ai */
+  .site-header { position: sticky; top: 0; z-index: 100; border-bottom: 1px solid oklch(91% 0.005 260 / 75%); background: oklch(99% 0.002 90 / 88%); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); }
+  .nav { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; padding: 14px 24px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: black; text-decoration: none; font-family: var(--mono); }
+  .brand:hover { color: black; text-decoration: none; }
+  .brand img { width: 20px; height: 20px; border-radius: 4px; }
+  .brand span { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .nav-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 24px; font-size: 14px; }
+  .nav-links a { color: var(--muted); text-decoration: none; }
+  .nav-links a:hover { color: var(--blue); text-decoration: none; }
+  .nav-links a[aria-current="page"] { color: var(--accent); }
+  .nav-links a:focus-visible, .brand:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+  /* Content */
+  main { max-width: 56rem; margin: 0 auto; padding: 48px 16px 72px; }
+  .eyebrow { font: 12px var(--mono); text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+  h1, h2, h3 { font-family: var(--mono); font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
+  h1 { font-size: 44px; margin: 0 0 8px; color: var(--accent); letter-spacing: -0.02em; }
+  .meta { font: 13px var(--mono); color: var(--soft); margin: 0 0 28px; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0 0 16px; }
+  h2 { font-size: 22px; margin: 56px 0 14px; padding-left: 14px; border-left: 3px solid var(--accent); scroll-margin-top: 80px; }
+  h3 { font-size: 16px; margin: 28px 0 8px; }
+  p, ul, ol { margin: 0 0 14px; }
   ul, ol { padding-left: 1.4rem; }
-  li { margin: .2rem 0; }
+  li { margin: 4px 0; }
+  strong { font-weight: 600; }
+
+  code { font: 0.875em var(--mono); color: var(--code-ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.05em 0.3em; }
+  pre { margin: 0 0 18px; padding: 18px 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; font: 13px/1.6 var(--mono); color: var(--code-ink); }
+  pre code { border: 0; padding: 0; background: none; font-size: inherit; }
+  .caption { font: 12px var(--mono); color: var(--soft); margin: 0 0 8px; }
+
+  .colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 24px 0; }
+  .color { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border-radius: 10px; color: white; font-family: var(--mono); }
+  .color:hover { color: white; text-decoration: none; filter: brightness(1.06); }
+  .color b { font-weight: 600; font-size: 16px; }
+  .color small { font-size: 12px; color: oklch(100% 0 0 / 82%); }
+  .color-green { background: var(--green); }
+  .color-red { background: var(--red); outline: 2px solid var(--ink); outline-offset: 2px; }
+  .color-blue { background: var(--blue); }
+
+  .note { border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 16px; margin: 0 0 18px; border-radius: 0 8px 8px 0; color: var(--muted); }
+  .note strong { color: var(--ink); }
+  .toc { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin: 28px 0 0; }
+  .toc ol { margin: 6px 0 0; columns: 2; column-gap: 32px; font-size: 15px; }
+  .toc .caption { margin: 0; }
+
+  .table-wrap { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { font: 12px var(--mono); text-transform: uppercase; color: var(--soft); background: var(--surface); }
+  td:first-child { white-space: nowrap; }
+  td code { white-space: nowrap; }
+
+  /* Footer, as on www.getcolors.ai */
+  .foot { border-top: 1px solid var(--line); padding: 28px 0; }
+  .foot-inner { max-width: 1120px; margin: 0 auto; padding-inline: 24px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; font-size: 13px; color: var(--soft); }
+  .foot a { color: var(--soft); text-decoration: none; }
+  .foot a:hover { color: var(--blue); }
+  .footer-home { display: inline-flex; align-items: center; gap: 10px; font-family: var(--mono); }
+  .footer-home img { border-radius: 4px; }
+  .footer-links { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+
+  @media (max-width: 600px) {
+    .nav { padding: 12px 16px; }
+    .nav-links { width: 100%; gap: 4px 16px; font-size: 13px; }
+    .nav-links a { display: inline-flex; align-items: center; min-height: 36px; }
+    main { padding-top: 32px; }
+    h1 { font-size: 34px; }
+    .lede { font-size: 17px; }
+    .colors { grid-template-columns: 1fr; }
+    .toc ol { columns: 1; }
+    .foot-inner { padding-inline: 16px; }
+  }
 </style>
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-4VKP1WY4QJ"></script>
 <script>
@@ -45,483 +119,245 @@
 <script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
 </head>
 <body>
+
+<header class="site-header">
+  <div class="nav">
+    <a class="brand" href="https://www.getcolors.ai/" aria-label="Colors — home">
+      <img src="https://www.getcolors.ai/favicon.svg" width="20" height="20" alt="">
+      <span>Colors</span>
+    </a>
+    <nav class="nav-links" aria-label="Colors navigation">
+      <a href="https://getcolors.github.io/green/">Green</a>
+      <a href="https://getcolors.github.io/red/" aria-current="page">Red</a>
+      <a href="https://getcolors.github.io/blue/">Blue</a>
+      <a href="https://github.com/pocketcontext/pocketdeploy">PocketDeploy</a>
+      <a href="https://github.com/getcolors/red">GitHub</a>
+    </nav>
+  </div>
+</header>
+
 <main>
 
-<h1>red <span class="v">specification · 2026-07-10</span></h1>
-<p class="tagline">A TypeScript/Bun library for building idempotent devops CLIs: desired state in YAML, workflows as step graphs threaded by one plain object, Selmer-style template-scaffolded configuration, and optional event-aware OpenTofu and Ansible steps — a package can use them, but does not need them.</p>
+<p class="eyebrow">Specification · TypeScript / Bun</p>
+<h1>red</h1>
+<p class="meta">2026-10-29 · <a href="https://github.com/getcolors/red/blob/main/SPEC.md">SPEC.md</a></p>
 
-<div class="toc">
-<strong>Contents</strong>
-<ol>
-  <li><a href="#philosophy">Philosophy</a></li>
-  <li><a href="#naming">Naming, desired state &amp; the opts contract</a></li>
-  <li><a href="#steps">Steps and errors</a></li>
-  <li><a href="#workflow">Workflows: wireFn, nextFn, and composition</a></li>
-  <li><a href="#parallel">Parallelism, fan-out &amp; joins</a></li>
-  <li><a href="#advice">Advice</a></li>
-  <li><a href="#config">red.yml and validation gates</a></li>
-  <li><a href="#scaffold">The scaffolding DSL and renderer</a></li>
-  <li><a href="#tofu">OpenTofu integration</a></li>
-  <li><a href="#ansible">Ansible integration</a></li>
-  <li><a href="#dryrun">Dry-run, progress, and runtime</a></li>
-  <li><a href="#cli">The CLI and ./red launcher</a></li>
-  <li><a href="#examples">Examples</a></li>
-  <li><a href="#testing">Testing strategy</a></li>
-  <li><a href="#layout">Project layout &amp; API index</a></li>
-</ol>
+<p class="lede">Coding agents write deployment code directly: the provider CLI and API calls, the ordering, the retries and the checks that Terraform and Ansible once had to declare. <strong>The colors are the foundation for that code</strong>: three workflow SDKs, Green, Red and Blue, that share one model in Clojure, TypeScript and Python.</p>
+<p>red is the TypeScript/Bun color. Build your own package on it, or start from <a href="https://github.com/pocketcontext/pocketdeploy">PocketDeploy</a>, the starter package built on Blue. Steps call cloud CLIs or APIs directly; red has no OpenTofu or Ansible integration.</p>
+
+<div class="colors" role="list">
+  <a class="color color-green" role="listitem" href="https://getcolors.github.io/green/"><b>green</b><small>Clojure / Babashka · canonical</small></a>
+  <a class="color color-red" role="listitem" href="https://getcolors.github.io/red/" aria-current="page"><b>red</b><small>TypeScript / Bun</small></a>
+  <a class="color color-blue" role="listitem" href="https://getcolors.github.io/blue/"><b>blue</b><small>Python / uv</small></a>
 </div>
+
+<nav class="toc" aria-label="Contents">
+  <p class="caption"># Contents</p>
+  <ol>
+    <li><a href="#philosophy">Philosophy</a></li>
+    <li><a href="#opts">The opts contract</a></li>
+    <li><a href="#steps">Steps and errors</a></li>
+    <li><a href="#workflows">Workflows: wireFn and nextFn</a></li>
+    <li><a href="#parallelism">Parallelism and joins</a></li>
+    <li><a href="#advice">Advice</a></li>
+    <li><a href="#config">YAML config and COLORS_PAR_*</a></li>
+    <li><a href="#helpers">Dry-run, progress, lifecycle</a></li>
+    <li><a href="#cli">CLI and the ./red launcher</a></li>
+    <li><a href="#example">The example</a></li>
+    <li><a href="#testing">Testing</a></li>
+    <li><a href="#api">API index</a></li>
+  </ol>
+</nav>
 
 <h2 id="philosophy">1. Philosophy</h2>
 <ul>
-  <li><strong>red is a library.</strong> Users define steps, wiring, and workflows in their own project; red supplies the engine, infrastructure helpers, template rendering, advice, and CLI plumbing.</li>
-  <li><strong>Everything is one object.</strong> Desired state is YAML loaded into <code>opts</code>. Every step reads and returns that plain object, possibly enriched with observed reality such as OpenTofu outputs or Ansible recaps.</li>
-  <li><strong>Idempotent apply.</strong> There is no plan phase in red itself. Re-running the same event should converge. <code>create</code> and <code>delete</code> are conventions; the event set is open.</li>
-  <li><strong>Errors are values.</strong> Steps report outcome with <code>"red/exit"</code>. Thrown exceptions are caught at step boundaries and converted into opts values, so failures can route through <code>nextFn</code> and joins like any other result.</li>
-  <li><strong>TypeScript/Bun only.</strong> red is the Bun implementation of the green workflow model. A green project ports mechanically by replacing Clojure keywords/namespaces with namespaced string keys and TypeScript modules.</li>
+  <li><strong>One model, three languages.</strong> Green is canonical; red and blue port its behaviour, locked by their test suites. A project ports between colors by mechanical rename: <code>:green/exit</code> → <code>"red/exit"</code> → <code>"blue/exit"</code>, <code>./green</code> → <code>./red</code> → <code>./blue</code>.</li>
+  <li><strong>Plain data, plain functions.</strong> State is one open object; a step is a function from it to it. No class hierarchy, no resource DSL, no state engine.</li>
+  <li><strong>Code, written by agents.</strong> A step calls the provider's CLI or API itself. The program is cheap to write and readable to review; nothing is hidden behind a second language.</li>
+  <li><strong>Cross-cutting behaviour is advice.</strong> Dry-run, progress, validation and retries wrap steps; the engine stays small.</li>
+  <li><strong>Errors are values.</strong> Failures flow through the graph as data and can be routed, not thrown past the caller.</li>
+  <li><strong>No runtime dependencies.</strong> red needs Bun and nothing else.</li>
 </ul>
 
-<h2 id="naming">2. Naming, desired state &amp; the opts contract</h2>
-<p>Everything called <code>green</code> in the original model is called <code>red</code> here. Clojure keywords become namespaced string keys, and keyword values become plain strings.</p>
-<table>
-<tr><th>green</th><th>red</th></tr>
-<tr><td><code>:green/exit</code></td><td><code>"red/exit"</code></td></tr>
-<tr><td><code>:green.scaffold/written</code></td><td><code>"red.scaffold/written"</code></td></tr>
-<tr><td><code>green.edn</code></td><td><code>red.yml</code></td></tr>
-<tr><td><code>./green</code></td><td><code>./red</code>, a Bun script</td></tr>
-<tr><td><code>green.workflow</code></td><td><code>red/workflow</code></td></tr>
-<tr><td><code>:zk/servers</code></td><td><code>"zk/servers"</code></td></tr>
-<tr><td><code>:create</code></td><td><code>"create"</code></td></tr>
-</table>
-<p>The base type is open: <code>Opts = { [key: string]: any }</code>. red reserves <code>red/*</code> and <code>red.*/*</code> keys; project and library state should live under namespace-like keys such as <code>"zk/servers"</code>, <code>"once/workdir"</code>, or <code>"tofu/outputs"</code>.</p>
-<table>
-<tr><th>Key</th><th>Meaning</th></tr>
-<tr><td><code>"red/event"</code></td><td>First positional CLI argument: <code>"create"</code>, <code>"delete"</code>, <code>"rotate"</code>, etc.</td></tr>
-<tr><td><code>"red/dry-run"</code></td><td>Stamped by <code>--dry-run</code>; dry-run advice uses it to skip named steps.</td></tr>
-<tr><td><code>"red/exit"</code></td><td>Integer outcome. Missing means success and is normalized to <code>0</code> after a step returns.</td></tr>
-<tr><td><code>"red/err"</code></td><td>Error message when <code>"red/exit"</code> is positive.</td></tr>
-<tr><td><code>"red/trace"</code></td><td>Stack trace string when a thrown exception is converted to a red failure.</td></tr>
-<tr><td><code>"red/step"</code></td><td>Current step name, stamped before each step runs. Advice such as progress reads it.</td></tr>
-<tr><td><code>"red/branches"</code></td><td>Array of per-branch result objects at a join or collapsed failed fork. Sort by your own key if order matters.</td></tr>
-<tr><td><code>"red.workflow/inherited"</code></td><td>Private advice-inheritance payload. It is stripped from public step and workflow results.</td></tr>
-</table>
-<div class="note"><strong>Step input is frozen.</strong> The engine recursively freezes plain objects and arrays, including nested values in already-frozen containers. Map, Set, Date, typed arrays, custom instances and accessor properties fail before the step runs. Functions remain callable; their captured state is outside this guarantee. Steps should return new objects with spread syntax instead of mutating input. If a step throws, the failure opts are built from the frozen input so partial mutation cannot leak.</div>
+<h2 id="opts">2. The opts contract</h2>
+<p>All cross-step state is one plain object threaded through the graph. The type is open (<code>interface Opts { [key: string]: any }</code>); steps read the keys they need and pass everything else through untouched.</p>
+<ul>
+  <li>The engine owns <code>red/*</code> and private <code>red.*/*</code> keys: <code>"red/exit"</code>, <code>"red/err"</code>, <code>"red/trace"</code>, <code>"red/event"</code>, <code>"red/dry-run"</code>, <code>"red/step"</code>, <code>"red/branches"</code>, <code>"red/state-file"</code>, and the private <code>"red.workflow/inherited"</code>.</li>
+  <li>Project data uses its own namespace-like keys (<code>"app/servers"</code>). Desired-state inputs that may be overridden from the environment stay flat and kebab-case (<code>do-token</code>).</li>
+  <li>Step input is recursively frozen at each step boundary. Map, Set, Date, typed arrays, class instances and accessor properties fail before the step runs. Steps return new objects with spread syntax.</li>
+</ul>
 
 <h2 id="steps">3. Steps and errors</h2>
-<p>A step is a plain function <code>(opts) =&gt; opts | Promise&lt;opts&gt;</code>, named by a namespaced string such as <code>"zk/node"</code>. The name anchors wiring, logging, CLI slices, joins, and advice.</p>
+<p>A <strong>step</strong> is <code>(opts) =&gt; Opts | Promise&lt;Opts&gt;</code>, named by a namespaced string such as <code>"app/node"</code>.</p>
 <ul>
-  <li>A returned plain object without <code>"red/exit"</code> is treated as success and stamped with <code>0</code>.</li>
-  <li>Returning a non-object, array, or missing return is a step failure.</li>
-  <li>Throwing is allowed: the runner catches the exception and returns <code>"red/exit": 1</code>, plus <code>"red/err"</code> and <code>"red/trace"</code>.</li>
-  <li>Throw <code>new StepError(message, {exit})</code> when a step or advice wants to choose a specific failure exit code.</li>
-  <li>Steps usually branch on <code>"red/event"</code>. Library steps use the convention “any non-<code>"delete"</code> event creates/applies; <code>"delete"</code> destroys/deprovisions.”</li>
-  <li>Steps must await everything they start. A stray un-awaited rejection cannot be attributed to a branch; <code>execCli</code> reports unhandled rejections and exits nonzero.</li>
+  <li><code>"red/exit"</code>: <code>0</code> succeeded, <code>&gt;0</code> failed; <code>failed(opts)</code> tests it. A successful step that sets no exit gets <code>0</code> stamped.</li>
+  <li>The step boundary is the exception firewall: any throw or awaited rejection becomes <code>"red/exit"</code>, <code>"red/err"</code> and <code>"red/trace"</code> on the step's <em>input</em> opts.</li>
+  <li><code>throw new StepError(message, { exit })</code> chooses the exit code; any other throw is exit 1.</li>
+  <li>A non-object return (a forgotten <code>return</code>) fails through the same contract.</li>
+  <li>Without a <code>nextFn</code>, a failed step has no successors and its branch halts. With one, routing a failure to cleanup or retry is user logic.</li>
+  <li>Exit 2 is reserved for usage and configuration errors.</li>
+  <li>Steps must await everything they start; <code>execCli</code> turns a stray unhandled rejection into a nonzero process exit.</li>
 </ul>
-<pre><code>import { StepError, type Opts } from "red/workflow";
+<p class="caption"># A step that calls a CLI directly</p>
+<pre><code>async function sh(cmd: string[]): Promise&lt;string&gt; {
+  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const [out, err, exit] = await Promise.all([
+    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+  ]);
+  if (exit !== 0) throw new StepError(`${cmd.join(" ")} failed: ${err.trim()}`, { exit });
+  return out.trim();
+}
 
-const check = (opts: Opts): Opts =&gt; {
-  if (!opts["app/name"]) {
-    throw new StepError("app/name is required", { exit: 2 });
-  }
-  return { ...opts, "red/exit": 0 };
-};</code></pre>
-<p>The helper <code>failed(opts)</code> is true when <code>(opts["red/exit"] ?? 0) &gt; 0</code>. Without a <code>nextFn</code>, a failed step produces no successors and that branch halts. With a <code>nextFn</code>, cleanup, retries, and alternate paths are ordinary user routing.</p>
+const host: StepFn = async (opts) =&gt; ({ ...opts, "hello/host": await sh(["uname", "-sm"]) });</code></pre>
 
-<h2 id="workflow">4. Workflows: wireFn, nextFn, and composition</h2>
-<pre><code>import { workflow, run, step, type Opts } from "red/workflow";
-
-const wf = workflow({
-  start: "zk/start",          // required
-  end: undefined,             // optional inclusive slice boundary
-  wireFn,                     // required static graph
-  nextFn,                     // optional dynamic router
-});
-
-const result = await run(wf, { "red/event": "create" });</code></pre>
-
-<h3>wireFn — the static graph</h3>
-<p><code>wireFn(step, runOpts)</code> returns a tuple containing the step function followed by its default successors for this run. <code>runOpts</code> is the initial opts passed to <code>run</code>, so the graph may depend on stable run-level inputs such as <code>"red/event"</code>.</p>
-<pre><code>const wireFn = (step: string, runOpts: Opts) =&gt; {
-  switch (step) {
-    case "zk/start":
-      return [startStep, "zk/node"] as const;
-    case "zk/node":
-      return [nodeStep, "zk/zoo-cfg"] as const;
-    case "zk/zoo-cfg":
-      return [zooCfgStep] as const;
-    case "ci/fork":
-      return [forkStep, "ci/a", "ci/b"] as const;
-  }
-};</code></pre>
-<p>Multiple successors mean a static fork. The same graph is used for join scheduling, so keep the happy path visible even when <code>nextFn</code> adds dynamic behavior. Do not base <code>wireFn</code> on values produced after the run starts; route those cases in <code>nextFn</code>.</p>
-
-<h3>nextFn — the dynamic router</h3>
-<p>When present, <code>nextFn</code> decides successors after each non-end step:</p>
-<pre><code>nextFn(step, defaultNext, opts) // =&gt; iterable of [nextStep, opts] pairs</code></pre>
+<h2 id="workflows">4. Workflows: wireFn and nextFn</h2>
+<p><code>workflow({ start, end?, wireFn, nextFn? })</code> builds an immutable workflow value. Every constructor and advice function is pure, so workflows can be shared and branched freely.</p>
 <ul>
-  <li>Return <code>[]</code>, <code>null</code>, or <code>undefined</code> to terminate a branch; return one pair to continue; return many pairs to fan out in parallel.</li>
-  <li>Because it sees the step result, including <code>"red/exit"</code>, <code>nextFn</code> can route failures to cleanup, retry, or halt.</li>
-  <li>Without <code>nextFn</code>, positive <code>"red/exit"</code> stops that path; otherwise the default successors run.</li>
+  <li><strong><code>wireFn(step, runOpts) =&gt; [fn, ...nextSteps] | undefined</code></strong> is the static happy-path graph. <code>runOpts</code> is the run's initial opts, stable for the whole run, so the graph may depend on <code>"red/event"</code> without flapping.</li>
+  <li><strong><code>nextFn(step, defaultNext, opts) =&gt; [[nextStep, opts], ...]</code></strong> routes dynamically: fan-out, conditional branches, error paths. Returning <code>[]</code> or <code>null</code> ends the branch.</li>
+  <li><code>end</code> is an inclusive slice boundary: the step runs, then the workflow stops.</li>
+  <li><code>step(subWorkflow, { inFn?, outFn? })</code> embeds a workflow as an ordinary step. <code>inFn</code> shapes the sub-workflow's opts; <code>outFn(opts, subResult)</code> merges the result back (default: the sub-result).</li>
+  <li><code>run(wf, opts)</code> runs a workflow and returns the final opts.</li>
 </ul>
-<pre><code>const nextFn = (step: string, defaultNext: string[] | null, opts: Opts) =&gt; {
-  if ((opts["red/exit"] ?? 0) &gt; 0) return [];
-  if (step === "zk/start") {
-    return opts["zk/servers"].map((server: unknown) =&gt; [
-      "zk/node",
-      { ...opts, "zk/server": server },
-    ] as const);
-  }
-  return (defaultNext ?? []).map((s) =&gt; [s, opts] as const);
-};</code></pre>
-
-<h3>Composition — a workflow is a step</h3>
-<pre><code>step(subWorkflow)
-step(subWorkflow, {
-  inFn:  (opts) =&gt; subOpts,
-  outFn: (opts, subResult) =&gt; parentResult,
-})</code></pre>
-<ul>
-  <li>The sub-workflow's result is just a step result, so failures propagate through parent routing naturally.</li>
-  <li>With default <code>inFn</code>, ambient keys such as <code>"red/event"</code> and <code>"red/dry-run"</code> flow into the child. If custom <code>inFn</code> builds opts from scratch, carry the ambient keys the child needs.</li>
-  <li>Advice inheritance is preserved even when <code>inFn</code> rebuilds opts from scratch. This lets a parent impose dry-run, backend, audit, or provider advice on embedded workflows by flat step name.</li>
-</ul>
-
-<h3>Slices</h3>
-<p>The optional <code>end</code> step is inclusive: it runs, then the workflow stops. The CLI's <code>--start</code> and <code>--end</code> override workflow boundaries for safe idempotent slice runs.</p>
-
-<h2 id="parallel">5. Parallelism, fan-out &amp; joins</h2>
-<ul>
-  <li><strong>Static fork:</strong> <code>wireFn</code> lists several successors.</li>
-  <li><strong>Dynamic fan-out:</strong> <code>nextFn</code> returns several <code>[step, opts]</code> pairs.</li>
-  <li><strong>Join:</strong> branches from different origins that converge on the same step run that step once, using the deepest shared fork's opts plus <code>"red/branches"</code>.</li>
-  <li><strong>Same-origin fan-out:</strong> same-step entries from one fan-out parent run independently instead of joining, which is how dynamic N-way item processing works.</li>
-  <li><strong>Failure:</strong> a failed branch inside a fork lets siblings finish their current step, collapses the fork, skips the join, and propagates the worst exit with all branch results under <code>"red/branches"</code>.</li>
-</ul>
-<div class="note"><strong>Join detection.</strong> Convergence is by flat step name. The scheduler waits while another live branch can statically reach the same step through this run's <code>wireFn</code> graph; dynamic detours not visible in that graph may require explicit routing care.</div>
-
-<h3>Scheduler algorithm in plain English</h3>
-<ol>
-  <li>Start with one live task: run <code>start</code> with the initial opts.</li>
-  <li>Loop while work remains, tracking live branches and finished terminals.</li>
-  <li>Group live entries by step.</li>
-  <li>Run only ready steps: if a different live branch can still reach a step, wait so it can join.</li>
-  <li>Run ready units concurrently with promises.</li>
-  <li>Expand each result into zero, one, or many next entries.</li>
-  <li>When different origins arrive at one step, run a join unit once.</li>
-  <li>Collapse failed forks before scheduling more work.</li>
-  <li>Finalize to one opts object: first failure wins, otherwise the last success.</li>
-</ol>
-
-<h3>Independent pipelines inside a fan-out</h3>
-<p>When <code>nextFn</code> fans out N branches and each branch traverses multiple steps in sequence, converging on the same second step can be interpreted as a join. Wrap the per-item pipeline in a sub-workflow with <code>step(subWorkflow)</code> when the count is dynamic — N items, N nodes, N tenants.</p>
-<pre><code>const pipelineWf = workflow({
-  start: "item/validate",
-  wireFn: (step) =&gt; {
-    switch (step) {
-      case "item/validate": return [validate, "item/transform"] as const;
-      case "item/transform": return [transform, "item/load"] as const;
-      case "item/load": return [load] as const;
-    }
-  },
-});
-
-const parentWireFn = (step: string) =&gt; {
-  switch (step) {
-    case "batch/start": return [start, "batch/process"] as const;
-    case "batch/process": return [step(pipelineWf)] as const;
-  }
-};</code></pre>
-<div class="note"><strong>When you don't need <code>step</code>.</strong> If the number of branches is fixed and known at design time, distinct step names work: <code>"deploy/staging"</code> and <code>"deploy/production"</code> never converge, so they run independently without a sub-workflow.</div>
-
-<p>A join consumes the deepest fork shared by all incoming branches and preserves its enclosing forks. Failed joins use the highest exit code and that branch's error and trace. Equal codes select the first incoming branch.</p>
-
-<h2 id="advice">6. Advice</h2>
-<p>Advice wraps step functions without changing graph wiring. Registries are immutable workflow data; adding/removing advice returns a new workflow.</p>
-<pre><code>import { adviceAdd, adviceAddAll, adviceRemove, adviceRemoveAll } from "red/workflow";
-
-const advised = adviceAdd(wf, "zk/node", "before", "app/backend", writeBackend);
-const withProgress = adviceAddAll(advised, "around", "app/progress", progress);
-const withoutBackend = adviceRemove(withProgress, "zk/node", "app/backend");
-const quiet = adviceRemoveAll(withoutBackend, "app/progress");</code></pre>
-<table>
-<tr><th>How</th><th>Effect</th><th>Use cases</th></tr>
-<tr><td><code>"around"</code></td><td><code>advice(base, opts)</code></td><td>Dry-run, retry, timing, locks; may call the base zero, one, or many times.</td></tr>
-<tr><td><code>"override"</code></td><td><code>advice(opts)</code>, base never runs</td><td>Replace/stub a step.</td></tr>
-<tr><td><code>"before"</code></td><td>Advice side effect, then base; advice return ignored</td><td>Setup: backend files, inventories, directories, locks.</td></tr>
-<tr><td><code>"after"</code></td><td>Base, then advice side effect; base return flows out</td><td>Audit, metrics, notifications, cleanup.</td></tr>
-<tr><td><code>"before-while"</code></td><td>Continue inward only while advice returns truthy</td><td>Validation and policy gates.</td></tr>
-<tr><td><code>"before-until"</code></td><td>Use advice result when it is truthy; otherwise base</td><td>Fast path / already converged no-op.</td></tr>
-<tr><td><code>"after-while"</code></td><td>Run advice only when the inward result is red-true</td><td>Success-only verification or registration.</td></tr>
-<tr><td><code>"after-until"</code></td><td>Use inward result if red-true; otherwise advice fallback</td><td>Recovery or alternate result.</td></tr>
-<tr><td><code>"filter-args"</code></td><td>Transform opts before base</td><td>Normalize/scope inputs.</td></tr>
-<tr><td><code>"filter-return"</code></td><td>Transform base result</td><td>Normalize/enrich outputs.</td></tr>
-</table>
-<p>Advice functions may be sync or async; composition awaits each layer. For while/until combinators, red uses Clojure-style truthiness: only <code>null</code>, <code>undefined</code>, and <code>false</code> are falsy, so <code>0</code> and <code>""</code> are truthy. For <code>after-while</code> and <code>after-until</code>, a step-result object is true when <code>"red/exit"</code> is missing or zero and false when it is positive.</p>
-<p>Stacking is Emacs-like. At equal <code>depth</code>, newest advice is outermost. <code>depth</code> (<code>-100..100</code>, default <code>0</code>) overrides add order: lower depths run farther outside, higher depths farther inside. Re-adding the same id replaces the old entry and moves it according to the new sequence/depth.</p>
-<p><strong>Advice inheritance through <code>step</code>.</strong> The enclosing run stamps its effective advice into opts under a private key, and the nested run merges that advice over the child's own registries. Ancestor entries are outermost at equal depth; same-id ancestor entries replace child entries. Use <code>advicePlan(wf, step)</code> or <code>advicePlan([parent, child], step)</code> to inspect the composed stack.</p>
-
-<h2 id="config">7. red.yml and validation gates</h2>
-<p>The CLI reads <code>red.yml</code> by default (override with <code>-f/--file</code>), parses it with <code>Bun.YAML.parse</code>, stamps the lifecycle event, and passes the resulting object to <code>run</code>.</p>
-<pre><code>zk/workdir: work
-zk/servers:
-  - {id: 1, name: zk1, ip: 10.0.0.1}
-  - {id: 2, name: zk2, ip: 10.0.0.2}
-  - {id: 3, name: zk3, ip: 10.0.0.3}
-
-# Quote version-like values; YAML would parse 3.10 as a number.
-zk/version: "3.10"</code></pre>
-<ul>
-  <li>Namespaced keys such as <code>zk/servers</code> parse unquoted in Bun YAML.</li>
-  <li>YAML 1.2 treats values like <code>no</code> as strings in Bun 1.3.14, but quote anything ambiguous in public examples.</li>
-  <li>Validation should happen at boundaries and/or as <code>before-while</code> gates.</li>
-</ul>
-<p><code>schemaGate(schema, {exit?})</code> builds a Zod-backed <code>before-while</code> advice. Gates validate and return the original opts; they must not replace opts with the parsed output because Zod can strip unrelated namespace keys.</p>
-<pre><code>import { z } from "zod";
-import { schemaGate } from "red/gates";
-import { adviceAdd } from "red/workflow";
-
-const stateSchema = z.object({
-  "zk/servers": z.array(z.object({ id: z.number(), name: z.string() })),
-}).passthrough();
-
-const gated = adviceAdd(wf, "zk/start", "before-while", "zk/state-schema", schemaGate(stateSchema));</code></pre>
-
-<h2 id="scaffold">8. The scaffolding DSL and renderer</h2>
-<p><code>scaffold(opts, specs)</code> materializes or removes a flat sequence of file specs:</p>
-<pre><code>import mainTf from "./templates/main.tf" with { type: "text" };
-import { scaffold } from "red/scaffold";
-
-const specs = [{
-  template: { name: "zk/main.tf", content: mainTf },
-  target: "{{workdir}}/nodes/{{node.id}}/main.tf",
-  data: { workdir: opts["zk/workdir"], node },
-}];
-
-return scaffold(opts, specs);</code></pre>
-<table>
-<tr><th>Key</th><th>Meaning</th></tr>
-<tr><td><code>template</code></td><td><code>{name, content}</code>. The content should come from a Bun text import. There is no runtime template lookup.</td></tr>
-<tr><td><code>target</code></td><td>Output path, itself rendered with the same renderer against <code>data</code>.</td></tr>
-<tr><td><code>data</code></td><td>Template data for both body and target path.</td></tr>
-<tr><td><code>opts</code></td><td>Optional render options, including delimiter overrides.</td></tr>
-</table>
-<p>On <code>"red/event": "delete"</code>, the same specs name targets to remove. The implementation removes files and prunes the immediate parent directory if it becomes empty. Return keys are <code>"red.scaffold/written"</code> or <code>"red.scaffold/deleted"</code>.</p>
-<p>The renderer implements the Selmer-compatible subset red exercises: variables, dotted paths, missing values as empty, HTML escaping by default, <code>safe</code>, <code>sort(attribute='...')</code>, <code>for</code> loops, and delimiter overrides (<code>tagOpen</code>, <code>tagClose</code>, <code>filterOpen</code>, <code>filterClose</code>). Delimiter overrides are useful when scaffolded Ansible files must preserve Jinja2 <code>{{ }}</code> and <code>{% %}</code>.</p>
-
-<h2 id="tofu">9. OpenTofu integration</h2>
-<pre><code>import { tofuStep, localBackendAdvice, s3BackendAdvice } from "red/tofu";
-
-const applyNode = (opts: Opts) =&gt;
-  tofuStep(opts, { dir: `${opts["zk/workdir"]}/node-${opts["zk/id"]}` });</code></pre>
-<ul>
-  <li>Any non-<code>"delete"</code> event: <code>tofu init -input=false -no-color</code>, then <code>tofu apply -auto-approve -input=false -no-color</code>, then <code>tofu output -json</code>.</li>
-  <li><code>"delete"</code>: <code>tofu init</code>, then <code>tofu destroy -auto-approve -input=false -no-color</code>.</li>
-  <li>Apply outputs are parsed to <code>{name: value}</code> and assoc'd under <code>"tofu/outputs"</code> by default. If you override <code>outputKey</code>, keep it namespaced.</li>
-  <li>Non-zero process exits become <code>"red/exit"</code> and <code>"red/err"</code>.</li>
-  <li>All subprocesses go through <code>runtime.exec</code>, which tests can stub.</li>
-</ul>
-<p>Backends are not hardwired. <code>backendAdvice</code> writes <code>backend.tf.json</code> for any backend type and config map (or function of opts), preserving native JSON values and nested collections. Helpers ship for local, S3, and GCS.</p>
-<pre><code>const withBackend = adviceAdd(
-  wf,
-  "zk/tofu",
-  "before",
-  "zk/backend",
-  localBackendAdvice((opts) =&gt; `${opts["zk/workdir"]}/node-${opts["zk/id"]}`),
-);</code></pre>
-
-<h2 id="ansible">10. Ansible integration</h2>
-<pre><code>import { ansibleStep, inventoryAdvice } from "red/ansible";
-
-const provision = (opts: Opts) =&gt;
-  ansibleStep(opts, {
-    dir: "ansible",
-    inventory: "inventory.ini",
-    privateKey: "work/ssh/id_ed25519",
-    user: "root",
-    hostKeyChecking: false,
-  });</code></pre>
-<ul>
-  <li>Any non-<code>"delete"</code> event runs the create playbook (<code>create.yml</code> by default); <code>"delete"</code> runs the delete playbook (<code>delete.yml</code> by default). Override with <code>playbooks</code>.</li>
-  <li>Options map to <code>ansible-playbook</code>: <code>inventory</code>, <code>privateKey</code>, <code>user</code>, <code>extraVars</code> (JSON <code>-e</code>), and <code>hostKeyChecking: false</code> (exports <code>ANSIBLE_HOST_KEY_CHECKING=False</code>).</li>
-  <li>On success, PLAY RECAP is parsed into per-host counters under <code>"ansible/recap"</code> by default; override with namespaced <code>recapKey</code>.</li>
-  <li><code>inventoryIni</code> renders deterministic INI from <code>{group: {hosts: [{name, vars}], vars}}</code>. Strings preserve whitespace, quotes, backslashes and literal-looking values such as <code>"123"</code>. Host values include shell quoting around their Python literal; group values use the literal directly.</li>
-  <li><code>inventoryAdvice</code> is a <code>before</code> advice that writes an inventory file from data or a function of opts, mirroring OpenTofu backend advice.</li>
-  <li><code>ansibleWithSpec</code> scaffolds then runs on create, and runs then removes scaffolded files on delete.</li>
-</ul>
-
-<h2 id="dryrun">11. Dry-run, progress, and runtime</h2>
-<p>Dry-run and progress are advice layers, not special cases in the engine.</p>
-<ul>
-  <li><code>dryRun.advise(wf, steps)</code> attaches <code>around</code> advice id <code>"red.dry-run/skip"</code> to named steps. With <code>"red/dry-run"</code>, it logs <code>dry-run: would run &lt;step&gt; (&lt;event&gt;)</code> and returns success without calling the step.</li>
-  <li><code>progress.advise(wf)</code> attaches all-step <code>around</code> advice id <code>"red.progress/progress"</code>. It logs <code>&gt;&gt;&gt; &lt;step&gt; (&lt;event&gt;)</code> before and <code>&lt;&lt;&lt; &lt;step&gt; (&lt;n&gt;ms)</code> after, reading <code>"red/step"</code>.</li>
-  <li><code>runtime.exec(cmd, {cwd, env})</code> is the single subprocess seam used by OpenTofu and Ansible helpers.</li>
-  <li><code>runtime.log(...args)</code> is the single log seam used by dry-run and progress.</li>
-</ul>
-<pre><code>import * as dryRun from "red/dry-run";
-import * as progress from "red/progress";
-
-const wf2 = progress.advise(
-  dryRun.advise(wf, ["zk/scaffold", "zk/tofu", "zk/ansible"]),
-);</code></pre>
-
-<h2 id="cli">12. The CLI and ./red launcher</h2>
-<pre><code>./red &lt;event&gt; [-f|--file red.yml] [--start step] [--end step] [--dry-run]
-
-./red create
-./red delete -f prod.yml
-./red create --start zk/node --end zk/node
-./red create --dry-run</code></pre>
-<ul>
-  <li>The first positional argument is stamped into <code>"red/event"</code>.</li>
-  <li><code>--start</code> and <code>--end</code> override workflow boundaries.</li>
-  <li><code>--dry-run</code> stamps <code>"red/dry-run": true</code>; it has an effect only on steps advised with <code>red/dry-run</code>.</li>
-  <li>Missing event, missing state file, YAML parse errors, or other CLI config errors return exit <code>2</code> from <code>runCli</code>.</li>
-  <li><code>execCli</code> prints <code>"red/err"</code> and <code>"red/trace"</code> to stderr and exits with <code>"red/exit"</code>.</li>
-</ul>
-<p>A project's <code>./red</code> is a self-contained Bun script: executable, no build step, no generated launcher. It owns the workflow definition, advice wiring, <code>execCli</code> call, and text imports of local templates.</p>
-<pre><code>#!/usr/bin/env bun
-import { execCli, workflow, type Opts } from "red";
-
-const start = (opts: Opts): Opts =&gt; ({ ...opts, "app/seen": true });
-
-const wf = workflow({
+<pre><code>const wf = workflow({
   start: "app/start",
   wireFn: (step) =&gt; {
     switch (step) {
-      case "app/start": return [start] as const;
+      case "app/start": return [start, "app/node"];
+      case "app/node": return [node, "app/join"];
+      case "app/join": return [join];
     }
   },
-});
+  nextFn: (step, defaultNext, opts) =&gt; {
+    if (failed(opts)) return [];
+    if (step === "app/start") {
+      return opts.servers.map((s: unknown) =&gt; ["app/node", { ...opts, "app/server": s }] as const);
+    }
+    return (defaultNext ?? []).map((s) =&gt; [s, opts] as const);
+  },
+});</code></pre>
 
-if (import.meta.main) {
-  await execCli(wf);
-}</code></pre>
-<div class="note"><strong>Consumer imports.</strong> Once red is published to npm, external consumers should use version-pinned imports such as <code>import { workflow } from "red@x.y.z"</code>. Until then, use a minimal <code>package.json</code> with a pinned git dependency and import from <code>red</code>; do not recommend unpinned Bun auto-install imports.</div>
+<h2 id="parallelism">5. Parallelism and joins</h2>
+<ol>
+  <li>Live branches are grouped by step. A step is <strong>blocked</strong> while another live branch could still reach it along static <code>wireFn</code> edges.</li>
+  <li>Same-step entries from the same fan-out run individually; entries converging from different origins <strong>join</strong>: the step runs once with the fork-point opts plus <code>"red/branches"</code>, the array of branch results.</li>
+  <li>Multiple successors fork into real parallel promises.</li>
+  <li>When a branch fails inside a fork, in-flight siblings finish their current step, then the fork <strong>collapses</strong>: the join is skipped and a terminal carries the worst exit, its error and trace, and <code>"red/branches"</code>. Collapse cascades outward through nested forks. Equal exit codes select the first incoming branch.</li>
+  <li>A join whose incoming branches already include a failure is skipped the same way.</li>
+  <li>Final result: no terminals → <code>{"red/exit": 0}</code>; one → it; several → the first failed one, else the last successful one.</li>
+</ol>
 
-<h2 id="examples">13. Examples</h2>
-<p>Each example is a self-contained Bun CLI that imports this checkout by relative path and keeps desired state in <code>red.yml</code>.</p>
-<table>
-<tr><th>Path</th><th>What it teaches</th></tr>
-<tr><td><code>examples/zookeeper</code></td><td>Fake 3-node cluster: dynamic fan-out from desired state, join at <code>zk/zoo-cfg</code>, scaffolding plus OpenTofu, backend-as-advice, and dry-run.</td></tr>
-<tr><td><code>examples/multi-zookeeper</code></td><td>Workflow composition: one cluster workflow embedded with <code>step</code>, fanned out once per cluster, with inherited parent advice.</td></tr>
-<tr><td><code>examples/once</code></td><td>ONCE-style single VPS with provider-swap advice, <code>compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)</code>, per-step tofu state, and scaffold-only Ansible files.</td></tr>
-<tr><td><code>examples/multi-once</code></td><td>Many ONCE boxes from one workflow. The parent replaces inherited provider/backend advice; S3 state keys are isolated by deployment and step. Dry-run is offline.</td></tr>
-<tr><td><code>examples/floci-zookeeper</code></td><td>Real local ZooKeeper on floci: OpenTofu targets floci, Ansible provisions over SSH, delete routes through Ansible before destroys, validation gates and retry advice are used. Non-dry-run needs Linux, Docker, floci, tofu, ansible, docker, and aws.</td></tr>
-</table>
-<pre><code>cd examples/zookeeper
+<h2 id="advice">6. Advice</h2>
+<p>Emacs <code>nadvice</code>-style combinators, scoped to a workflow value:</p>
+<div class="table-wrap"><table>
+  <tr><th>how</th><th>behaviour</th></tr>
+  <tr><td><code>around</code></td><td><code>fn(base, opts)</code> decides whether and how to call the step.</td></tr>
+  <tr><td><code>override</code></td><td><code>fn(opts)</code> replaces the step.</td></tr>
+  <tr><td><code>before</code> / <code>after</code></td><td><code>fn(opts)</code> runs before or after; its return is ignored.</td></tr>
+  <tr><td><code>before-while</code></td><td>Runs the step only if <code>fn(opts)</code> is truthy; otherwise returns that value.</td></tr>
+  <tr><td><code>before-until</code></td><td>Returns <code>fn(opts)</code> if truthy; otherwise runs the step.</td></tr>
+  <tr><td><code>after-while</code></td><td>If the step succeeded, returns <code>fn(opts)</code>; otherwise the step's result.</td></tr>
+  <tr><td><code>after-until</code></td><td>If the step failed, returns <code>fn(opts)</code>; otherwise the step's result.</td></tr>
+  <tr><td><code>filter-args</code></td><td>The step receives <code>fn(opts)</code>.</td></tr>
+  <tr><td><code>filter-return</code></td><td>The result is <code>fn(stepResult)</code>.</td></tr>
+</table></div>
+<ul>
+  <li><code>adviceAdd(wf, step, how, id, fn, props?)</code> targets one step; <code>adviceAddAll(wf, how, id, fn, props?)</code> targets every step. <code>adviceRemove</code> / <code>adviceRemoveAll</code> remove by id.</li>
+  <li>Stacking: most recently added is outermost, across both registries, unless <code>depth</code> (−100..100, default 0) overrides; lower depth is more outward. Re-adding an id replaces it.</li>
+  <li>Truthiness is Clojure's: only <code>null</code>, <code>undefined</code> and <code>false</code> are falsy. For <code>after-while</code>/<code>after-until</code> a step result is true when its <code>"red/exit"</code> is 0 or absent.</li>
+  <li>Advice is inherited through <code>step</code> embeds by flat step name; ancestor advice stacks outside child advice, and an ancestor entry with the same id replaces the child's.</li>
+  <li><code>advicePlan(wfOrChain, step)</code> lists the composed stack outermost-first with <code>{id, how, depth, seq, scope, level}</code>.</li>
+</ul>
+
+<h2 id="config">7. YAML config and COLORS_PAR_*</h2>
+<p>Desired state is pure data in <code>red.yml</code>, parsed by <code>Bun.YAML.parse</code> (YAML 1.2: <code>no</code> is a string; <code>app/…</code> keys parse unquoted). Loaded keys land in opts unchanged, plus <code>"red/state-file"</code>, the file's absolute path, so a package resolves relative paths against the file. Quote version-like values such as <code>"3.10"</code>.</p>
+<p>Every <code>COLORS_PAR_&lt;UPPER_SNAKE&gt;</code> environment variable is then overlaid onto the flat kebab-case key it names: <code>COLORS_PAR_DO_TOKEN</code> → <code>do-token</code>. The value is coerced to the type of the existing value (<code>true</code>/<code>false</code> for booleans, decimal integers for integers, otherwise a string). The namespace is shared by all three colors; there is no per-color prefix. Credentials live in these variables, never in the YAML file.</p>
+<pre><code>workdir: work      # relative to this file
+message: hello
+names:
+  - alice
+  - bob</code></pre>
+
+<h2 id="helpers">8. Dry-run, progress, lifecycle</h2>
+<p>Optional helpers built on advice and plain steps; the engine knows nothing about them.</p>
+<ul>
+  <li><strong><code>dryRun.advise(wf, steps)</code></strong> adds an <code>around</code> advice (id <code>"red.dry-run/skip"</code>) to the listed side-effecting steps. When <code>"red/dry-run"</code> is set (by <code>--dry-run</code>) it logs <code>dry-run: would run &lt;step&gt; (&lt;event&gt;)</code> and skips the step.</li>
+  <li><strong><code>progress.advise(wf)</code></strong> adds an all-step <code>around</code> advice (id <code>"red.progress/progress"</code>) logging <code>&gt;&gt;&gt; &lt;step&gt; (&lt;event&gt;)</code> on entry and <code>&lt;&lt;&lt; &lt;step&gt; (&lt;n&gt;ms)</code> on exit.</li>
+  <li><strong><code>lifecycle.preflight(opts, config, env?)</code></strong> is a reusable first step: merge <code>defaults</code> under opts, apply an optional <code>overlay</code>, run every validator <code>(opts, env, {event, real})</code>, and fail with exit 2 and all errors joined if any report; otherwise call <code>afterValidate</code> or return exit 0. <code>real</code> is false under dry-run.</li>
+  <li>Both advice helpers log through <code>runtime.log</code>, a mutable seam tests replace. red has no subprocess runner: steps spawn commands or call APIs themselves.</li>
+</ul>
+
+<h2 id="cli">9. CLI and the ./red launcher</h2>
+<pre><code>./red &lt;event&gt; [-f|--file red.yml] [--start step] [--end step] [--dry-run]</code></pre>
+<ul>
+  <li><code>runCli(wf, args, config?)</code> is the non-exiting, testable form: parse arguments, load the YAML, overlay <code>COLORS_PAR_*</code>, stamp <code>"red/event"</code> (and <code>"red/dry-run"</code>), apply <code>--start</code>/<code>--end</code>, run, and return the final opts. Usage, missing-file and parse errors return exit 2.</li>
+  <li><code>execCli(wf, args?, config?)</code> prints <code>"red/err"</code> and <code>"red/trace"</code> to stderr and exits with <code>"red/exit"</code>.</li>
+  <li><code>CliConfig</code>: <code>defaultFile</code> (default <code>red.yml</code>), <code>searchParents</code> (find it in the nearest ancestor via <code>findUp</code>), <code>allowedEvents</code> (anything else is a usage error). Events are otherwise arbitrary strings.</li>
+</ul>
+<p>A project's <code>./red</code> is a self-contained, executable Bun script (<code>#!/usr/bin/env bun</code>) holding the steps, the workflow, its advice and the <code>execCli</code> call. Depend on red by a pinned version: a version-pinned npm specifier once published, until then a pinned git dependency in <code>package.json</code>; never an unpinned specifier.</p>
+
+<h2 id="example">10. The example</h2>
+<p><a href="https://github.com/getcolors/red/tree/main/examples/hello"><code>examples/hello</code></a> is a small, offline package whose steps call local command-line tools:</p>
+<pre><code>hello/check  → hello/host → hello/greet (one branch per name) → hello/report
+preflight      uname -sm    create: write &lt;name&gt;.txt             create: cat the files
+                            delete: rm -f &lt;name&gt;.txt             delete: rmdir the workdir</code></pre>
+<p>Progress advice wraps every step; dry-run advice skips <code>hello/greet</code> and <code>hello/report</code>.</p>
+<pre><code>cd examples/hello
 ./red create --dry-run
 ./red create
-./red delete
-
-cd ../multi-zookeeper
-./red create --dry-run
-./red create
-./red delete
-
-cd ../once
-./red create --dry-run
-./red create
-./red delete
-
-cd ../multi-once
-./red create --dry-run   # offline path; real create needs an S3 bucket
-./red create
-./red delete
-
-cd ../floci-zookeeper
-./red create --dry-run   # offline path; real create needs Linux + Docker + floci
-./red create
+COLORS_PAR_MESSAGE=hi ./red create
 ./red delete</code></pre>
 
-<h2 id="testing">14. Testing strategy</h2>
-<p>The suite runs with <code>bun test</code>; TypeScript checking runs with <code>bun run typecheck</code>. Test files are discovered as <code>test/*.test.ts</code>.</p>
+<h2 id="testing">11. Testing</h2>
 <ul>
-  <li><code>test/workflow.test.ts</code> covers linear runs, errors, slices, event-specific static graphs, dynamic routing, fork/join, failure collapse, concurrency, and composition.</li>
-  <li><code>test/advice.test.ts</code> covers every advice combinator, ordering/depth, all-step advice, removal/replacement, and inheritance through <code>step</code>.</li>
-  <li><code>test/scaffold.test.ts</code> covers template rendering, create/delete symmetry, and idempotent rendering.</li>
-  <li><code>test/tofu.test.ts</code> and <code>test/ansible.test.ts</code> stub <code>runtime.exec</code> instead of shelling out.</li>
-  <li><code>test/cli.test.ts</code>, <code>test/dry-run.test.ts</code>, <code>test/progress.test.ts</code>, and <code>test/gates.test.ts</code> cover CLI flags, advice helpers, logging, and Zod validation gates.</li>
-  <li><code>test/zookeeper.test.ts</code> is the e2e suite: if <code>tofu</code> is on <code>PATH</code>, it runs real render/apply/output/destroy cycles over HCL containing only <code>locals</code> and <code>output</code> blocks.</li>
-  <li><code>test/floci-zookeeper.test.ts</code> is opt-in with <code>RED_FLOCI_E2E=1</code> because it requires Docker/floci, Ansible, provider downloads, and minutes of runtime.</li>
+  <li><code>bun test</code> discovers <code>test/*.test.ts</code>. Engine, advice, CLI, dry-run, progress and lifecycle behaviour are tested in-process; tests capture logs by replacing <code>runtime.log</code>.</li>
+  <li><code>test/hello-example.test.ts</code> drives the real <code>examples/hello/red</code> launcher as a subprocess: create, delete, dry-run, <code>COLORS_PAR_*</code> overlay, validation and command failure.</li>
+  <li><code>bun run typecheck</code> runs <code>tsc --noEmit</code>. CI runs both on Bun 1.3.14.</li>
 </ul>
 
-<h2 id="layout">15. Project layout &amp; API index</h2>
-<pre><code>red/
-├── package.json         Bun/TypeScript package metadata and exports
-├── bun.lock             Locked dependency graph
-├── tsconfig.json        TypeScript config
-├── SPEC.md              Behavioral contract
-├── README.md            User-facing overview
-├── index.html           This specification
-├── src/
-│   ├── advice.ts        nadvice combinators and pure registry ops
-│   ├── workflow.ts      workflow, run, step, advice add/remove/all, advicePlan
-│   ├── renderer.ts      small internal Selmer-compatible renderer
-│   ├── scaffold.ts      flat file-spec DSL over text-imported templates
-│   ├── tofu.ts          tofuStep, outputs, backend advices (local/s3/gcs)
-│   ├── ansible.ts       ansibleStep, ansibleWithSpec, recap parsing, inventory advice
-│   ├── dry-run.ts       dry-run advice + advise
-│   ├── progress.ts      progress advice + advise
-│   ├── cli.ts           runCli, execCli, arg parsing
-│   ├── gates.ts         Zod schema gates
-│   ├── runtime.ts       mutable subprocess/log seam
-│   └── index.ts         root re-exports
-├── test/                advice, workflow, scaffold, cli, dry-run, progress, tofu, ansible, gates, zookeeper
-└── examples/            zookeeper, multi-zookeeper, once, multi-once, floci-zookeeper</code></pre>
+<h2 id="api">12. API index</h2>
+<p>Subpath exports: <code>red</code>, <code>red/workflow</code>, <code>red/advice</code>, <code>red/cli</code>, <code>red/dry-run</code>, <code>red/progress</code>, <code>red/lifecycle</code>, <code>red/runtime</code>. The root re-exports the workflow and CLI API, the <code>advice</code>, <code>dryRun</code>, <code>progress</code> and <code>lifecycle</code> namespaces, and <code>runtime</code>.</p>
+<div class="table-wrap"><table>
+  <tr><th>name</th><th>contract</th></tr>
+  <tr><td><code>workflow</code></td><td><code>({start, end?, wireFn, nextFn?}) =&gt; Workflow</code></td></tr>
+  <tr><td><code>run</code></td><td><code>(wf, opts) =&gt; Promise&lt;Opts&gt;</code></td></tr>
+  <tr><td><code>step</code></td><td><code>(wf, {inFn?, outFn?}) =&gt; StepFn</code>; embed a workflow.</td></tr>
+  <tr><td><code>failed</code></td><td><code>(opts) =&gt; boolean</code>; <code>"red/exit" &gt; 0</code>.</td></tr>
+  <tr><td><code>StepError</code></td><td><code>new StepError(message, {exit?})</code>; choose the exit code.</td></tr>
+  <tr><td><code>adviceAdd</code></td><td><code>(wf, step, how, id, fn, props?) =&gt; Workflow</code></td></tr>
+  <tr><td><code>adviceAddAll</code></td><td><code>(wf, how, id, fn, props?) =&gt; Workflow</code></td></tr>
+  <tr><td><code>adviceRemove</code></td><td><code>(wf, step, id) =&gt; Workflow</code></td></tr>
+  <tr><td><code>adviceRemoveAll</code></td><td><code>(wf, id) =&gt; Workflow</code></td></tr>
+  <tr><td><code>advicePlan</code></td><td><code>(wf | wf[], step) =&gt; PlanEntry[]</code>, outermost first.</td></tr>
+  <tr><td>types</td><td><code>Opts</code>, <code>StepFn</code>, <code>WireFn</code>, <code>WireDecl</code>, <code>NextFn</code>, <code>NextPair</code>, <code>Workflow</code>, <code>PlanEntry</code>, <code>CliConfig</code></td></tr>
+  <tr><td><code>advice.*</code></td><td>Registry primitives: <code>hows</code>, <code>add</code>, <code>removeId</code>, <code>addGlobal</code>, <code>removeGlobalId</code>, <code>mergeEntries</code>, <code>mergeRegistry</code>, <code>ordered</code>, <code>compose</code>, <code>truthy</code>, <code>AdviceError</code>.</td></tr>
+  <tr><td><code>runCli</code></td><td><code>(wf, args, config?) =&gt; Promise&lt;Opts&gt;</code>; non-exiting.</td></tr>
+  <tr><td><code>execCli</code></td><td><code>(wf, args?, config?) =&gt; Promise&lt;never&gt;</code>; prints errors, exits.</td></tr>
+  <tr><td><code>readPars</code></td><td><code>(opts, env?) =&gt; Opts</code>; overlay <code>COLORS_PAR_*</code>.</td></tr>
+  <tr><td><code>parName</code></td><td><code>(key) =&gt; string</code>; <code>do-token</code> → <code>COLORS_PAR_DO_TOKEN</code>.</td></tr>
+  <tr><td><code>findUp</code></td><td><code>(name, start?) =&gt; string | undefined</code></td></tr>
+  <tr><td><code>usage</code></td><td>The CLI usage string.</td></tr>
+  <tr><td><code>dryRun.advise</code></td><td><code>(wf, steps) =&gt; Workflow</code>; also <code>dryRun.advice(step)</code>, <code>dryRun.SKIP_ID</code>.</td></tr>
+  <tr><td><code>progress.advise</code></td><td><code>(wf) =&gt; Workflow</code>; also <code>progress.progress</code>, <code>progress.PROGRESS_ID</code>.</td></tr>
+  <tr><td><code>lifecycle.preflight</code></td><td><code>(opts, {defaults?, overlay?, validators?, afterValidate?}, env?) =&gt; Promise&lt;Opts&gt;</code></td></tr>
+  <tr><td><code>runtime</code></td><td>Mutable <code>{log}</code> seam for the library's log lines.</td></tr>
+</table></div>
 
-<h3>Distribution</h3>
-<p>Library package name: <code>red</code>. Version in this checkout: <code>0.1.0</code>. The package has not yet been published to npm.</p>
-<ul>
-  <li><strong>Current rule:</strong> external consumers should use a minimal <code>package.json</code> with a pinned git dependency and import from <code>red</code>.</li>
-  <li><strong>Future npm publishing:</strong> consumer docs should use version-pinned specifiers such as <code>red@x.y.z</code>.</li>
-  <li><strong>Development:</strong> in-repo examples import by relative path.</li>
-</ul>
-
-<table>
-<tr><th>Function / export</th><th>Signature / purpose</th></tr>
-<tr><td><code>workflow</code></td><td><code>({start, end?, wireFn, nextFn?}) =&gt; Workflow</code>; <code>wireFn</code> is <code>(step, runOpts) =&gt; [fn, ...next]</code>.</td></tr>
-<tr><td><code>run</code></td><td><code>(workflow, opts) =&gt; Promise&lt;Opts&gt;</code>; runs the scheduler and returns final opts.</td></tr>
-<tr><td><code>step</code></td><td><code>(workflow, {inFn?, outFn?}) =&gt; StepFn</code>; embeds a workflow as an ordinary step.</td></tr>
-<tr><td><code>StepError</code></td><td>Error subclass with <code>exit</code>; throw to choose a step failure exit code.</td></tr>
-<tr><td><code>failed</code></td><td><code>(opts) =&gt; boolean</code>; true when <code>"red/exit"</code> is positive.</td></tr>
-<tr><td><code>adviceAdd</code></td><td><code>(workflow, step, how, id, fn, props?) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>adviceRemove</code></td><td><code>(workflow, step, id) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>adviceAddAll</code></td><td><code>(workflow, how, id, fn, props?) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>adviceRemoveAll</code></td><td><code>(workflow, id) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>advicePlan</code></td><td><code>(workflowOrChain, step) =&gt; PlanEntry[]</code>; printable advice stack.</td></tr>
-<tr><td><code>advice.hows</code>, <code>advice.ordered</code>, <code>advice.compose</code></td><td>Low-level advice combinator set, ordering, and wrapper composition.</td></tr>
-<tr><td><code>advice.add</code>, <code>advice.removeId</code>, <code>advice.addGlobal</code>, <code>advice.removeGlobalId</code></td><td>Low-level pure registry operations used by <code>red/workflow</code>.</td></tr>
-<tr><td><code>advice.mergeEntries</code>, <code>advice.mergeRegistry</code></td><td>Low-level inheritance helpers for composing parent/child advice registries.</td></tr>
-<tr><td><code>renderTemplate</code></td><td><code>(template, data, opts?) =&gt; string</code>; render a text-imported template.</td></tr>
-<tr><td><code>scaffold</code></td><td><code>(opts, specs) =&gt; opts</code>; create or delete rendered targets.</td></tr>
-<tr><td><code>tofu.outputs</code></td><td><code>(dir) =&gt; Promise&lt;Record&lt;string, unknown&gt;&gt;</code>; parse <code>tofu output -json</code>.</td></tr>
-<tr><td><code>tofu.tofuStep</code></td><td><code>(opts, {dir, outputKey?}) =&gt; Promise&lt;Opts&gt;</code>.</td></tr>
-<tr><td><code>tofu.backendAdvice</code></td><td><code>(dirFn, type, config) =&gt; beforeAdvice</code>; write <code>backend.tf.json</code>.</td></tr>
-<tr><td><code>tofu.localBackendAdvice</code></td><td><code>(dirFn, config?) =&gt; beforeAdvice</code>.</td></tr>
-<tr><td><code>tofu.s3BackendAdvice</code></td><td><code>(dirFn, config) =&gt; beforeAdvice</code>.</td></tr>
-<tr><td><code>tofu.gcsBackendAdvice</code></td><td><code>(dirFn, config) =&gt; beforeAdvice</code>.</td></tr>
-<tr><td><code>ansible.defaultPlaybooks</code></td><td>Default event-to-playbook map: <code>{create: "create.yml", delete: "delete.yml"}</code>.</td></tr>
-<tr><td><code>ansible.playbook</code></td><td><code>(opts, playbooks?) =&gt; string</code>; select create/delete playbook.</td></tr>
-<tr><td><code>ansible.parseRecap</code></td><td><code>(ansibleOutput) =&gt; perHostCounters</code>.</td></tr>
-<tr><td><code>ansible.ansibleStep</code></td><td><code>(opts, config) =&gt; Promise&lt;Opts&gt;</code>.</td></tr>
-<tr><td><code>ansible.ansibleWithSpec</code></td><td><code>(opts, ansibleConfig, specs) =&gt; Promise&lt;Opts&gt;</code>; scaffold/run ordering for Ansible.</td></tr>
-<tr><td><code>ansible.inventoryIni</code></td><td><code>(groups) =&gt; string</code>; deterministic INI renderer.</td></tr>
-<tr><td><code>ansible.inventoryAdvice</code></td><td><code>(fileFn, groups) =&gt; beforeAdvice</code>; write inventory before a step.</td></tr>
-<tr><td><code>dryRun.advice</code></td><td><code>(step) =&gt; aroundAdvice</code>.</td></tr>
-<tr><td><code>dryRun.advise</code></td><td><code>(workflow, steps) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>progress.progress</code></td><td>All-step around advice that logs entry/exit timing.</td></tr>
-<tr><td><code>progress.advise</code></td><td><code>(workflow) =&gt; Workflow</code>.</td></tr>
-<tr><td><code>schemaGate</code></td><td><code>(zodSchema, {exit?}) =&gt; beforeWhileAdvice</code>; validate without transforming opts.</td></tr>
-<tr><td><code>usage</code></td><td>CLI usage string.</td></tr>
-<tr><td><code>runCli</code></td><td><code>(workflow, args) =&gt; Promise&lt;Opts&gt;</code>; non-exiting CLI runner.</td></tr>
-<tr><td><code>execCli</code></td><td><code>(workflow, args?) =&gt; Promise&lt;never&gt;</code>; print errors and exit process.</td></tr>
-<tr><td><code>runtime</code></td><td>Mutable <code>{exec, log}</code> seam used by subprocess and logging helpers.</td></tr>
-</table>
-
-<h2 id="kubernetes">Kubernetes controllers</h2>
-<p><code>red.kubernetes</code> reconciles package workflows with bounded polling workers,
-state-identity locks, optimistic status writes, and deletion finalizers.
-The kubectl transport uses an explicit context or in-cluster authentication.
-Read the <a href="docs/kubernetes.md">controller contract</a>.</p>
 </main>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <a class="footer-home" href="https://www.getcolors.ai/" aria-label="Colors — home">
+      <img src="https://www.getcolors.ai/favicon.svg" width="20" height="20" alt="">
+      <span>Colors</span>
+    </a>
+    <div class="footer-links">
+      <a href="https://www.getcolors.ai/">www.getcolors.ai</a>
+      <a href="https://www.getcolors.ai/blog">Blog</a>
+      <a href="https://github.com/getcolors/red">GitHub</a>
+    </div>
+  </div>
+</footer>
+
 </body>
 </html>

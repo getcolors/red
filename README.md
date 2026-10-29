@@ -1,11 +1,26 @@
 # red
 
-`red` is a TypeScript/Bun library for building idempotent devops CLIs:
-desired state in YAML, workflows as step graphs threaded by one plain object,
-Selmer-style template scaffolding, and optional event-aware OpenTofu and
-Ansible steps — a package can use them, but does not need them.
+`red` is the TypeScript/Bun workflow SDK of [Colors](https://www.getcolors.ai/).
+Coding agents now write deployment code directly; the colors are the
+foundation for that code. Three SDKs share one model —
+[green](https://github.com/getcolors/green) (Clojure/Babashka, canonical),
+red (TypeScript/Bun) and [blue](https://github.com/getcolors/blue)
+(Python/uv):
 
-The full behavioral contract is in [`SPEC.md`](SPEC.md).
+- a step is `(opts) => opts`, threading one plain object;
+- a workflow is a static `wireFn` graph plus a dynamic `nextFn`, with
+  parallel fan-out and joins;
+- layered, Emacs `nadvice`-style advice for cross-cutting behaviour;
+- YAML desired state with `COLORS_PAR_*` environment overrides;
+- optional dry-run, progress and lifecycle preflight helpers.
+
+Steps call cloud CLIs or APIs directly. Build your own package on red, or
+start from [PocketDeploy](https://github.com/pocketcontext/pocketdeploy), the
+starter package built on blue. OpenTofu and Ansible support was removed on
+2026-10-29.
+
+The full behavioral contract is in [`SPEC.md`](SPEC.md); the same spec is
+published at <https://getcolors.github.io/red/>.
 
 ## Install
 
@@ -15,171 +30,119 @@ For development in this repository:
 bun install
 ```
 
-For consumers, use a version-pinned package once `red` is published to npm:
-
-```ts
-import { workflow, execCli } from "red@x.y.z";
-```
-
-Until an npm release exists, use a minimal `package.json` with a pinned git
-dependency and import from `red` there. Do not use an unpinned specifier.
+red has no runtime dependencies. For consumers, use a version-pinned package
+once `red` is published to npm (`import { workflow, execCli } from
+"red@x.y.z"`). Until an npm release exists, use a minimal `package.json` with a
+pinned git dependency and import from `red` there. Do not use an unpinned
+specifier.
 
 ## Commands
 
 ```sh
-bun test              # run the TypeScript test suite
+bun test              # run the test suite (includes the example)
 bun run typecheck     # run tsc --noEmit
 ```
-
-The end-to-end ZooKeeper tests use real `tofu` over locals/outputs-only HCL and
-skip automatically when `tofu` is not on `PATH`. The real floci example test is
-opt-in: `RED_FLOCI_E2E=1 bun test test/floci-zookeeper.test.ts`.
 
 ## The model in one glance
 
 ```ts
-import { execCli, type Opts, workflow } from "red";
+import { execCli, failed, type Opts, workflow } from "red";
 
 const mark = (name: string) => (opts: Opts) => ({
   ...opts,
   seen: [...(opts.seen ?? []), name],
 });
 
-const wireFn = (step: string, runOpts: Opts) => {
-  switch (step) {
-    case "zk/start":
-      return [mark("start"), "zk/node"] as const;
-    case "zk/node":
-      return [mark("node"), "zk/join"] as const;
-    case "zk/join":
-      return [mark("join")] as const;
-  }
-};
+const wf = workflow({
+  start: "app/start",
+  wireFn: (step) => {
+    switch (step) {
+      case "app/start": return [mark("start"), "app/node"];
+      case "app/node": return [mark("node"), "app/join"];
+      case "app/join": return [mark("join")];
+    }
+  },
+  // fan out one branch per server; the branches join at app/join
+  nextFn: (step, defaultNext, opts) => {
+    if (failed(opts)) return [];
+    if (step === "app/start") {
+      return opts.servers.map((server: unknown) => ["app/node", { ...opts, "app/server": server }] as const);
+    }
+    return (defaultNext ?? []).map((s) => [s, opts] as const);
+  },
+});
 
-const nextFn = (step: string, defaultNext: string[] | null, opts: Opts) => {
-  if ((opts["red/exit"] ?? 0) > 0) return [];
-  if (step === "zk/start") {
-    return opts["zk/servers"].map((server: unknown) => [
-      "zk/node",
-      { ...opts, "zk/node": server },
-    ] as const);
-  }
-  return (defaultNext ?? []).map((s) => [s, opts] as const);
-};
-
-const wf = workflow({ start: "zk/start", wireFn, nextFn });
-
-if (import.meta.main) {
-  await execCli(wf);
-}
+if (import.meta.main) await execCli(wf);
 ```
 
 Run a project launcher as:
 
 ```sh
-./red create -f red.yml
+./red create              # loads ./red.yml
 ./red delete -f red.yml
 ./red create --dry-run
+./red create --start app/node --end app/node
 ```
 
 ## Core concepts
 
 - **Opts** are one open plain object threaded through every step. Engine keys
   live under `red/*` (`"red/exit"`, `"red/err"`, `"red/event"`,
-  `"red/branches"`, ...); project data should use its own namespace-like
-  string keys (`"zk/servers"`, `"once/workdir"`, ...).
+  `"red/branches"`, ...); project data uses its own namespace-like keys.
 - A **step** is `(opts) => opts | Promise<opts>`. The engine deep-freezes step
-  input, catches thrown errors, rejects non-plain-object returns, and stamps a
-  default `"red/exit": 0` on success.
+  input, catches thrown errors (`StepError` chooses the exit code), rejects
+  non-plain-object returns, and stamps `"red/exit": 0` on success.
 - A **workflow** is a static `wireFn` graph plus an optional dynamic `nextFn`.
   Independent successors run concurrently; converging branches join once with
   branch results under `"red/branches"`; failed forks collapse cleanly.
-- **Advice** is Emacs `nadvice`-style and workflow-scoped: `around`, `before`,
-  `after`, `override`, while/until variants, `filter-args`, and
-  `filter-return`. Advice can target one step or all steps, has deterministic
-  depth/add-order stacking, and is inherited through embedded workflows.
-- **Composition** uses `step(subWorkflow, { inFn, outFn })` to turn a workflow into
-  an ordinary step.
-- **Scaffolding** renders text-imported templates with a small internal
-  Selmer-compatible renderer. A file spec is `{template: {name, content},
-  target, data, opts?}`; on `"delete"` the same spec removes the rendered
-  target and prunes empty parent directories.
-- **OpenTofu and Ansible** integrations are event-aware steps. OpenTofu
-  backends are written as `backend.tf.json`, preserving native JSON values and
-  nested collections; backends and inventories are attached as `before` advice
-  instead of being hardwired.
-- **Dry-run and progress** are advice layers, not engine features.
+- **Advice** is workflow-scoped: `around`, `before`, `after`, `override`,
+  while/until variants, `filter-args`, `filter-return`. It targets one step or
+  all steps, stacks by depth and add order, and is inherited through embedded
+  workflows (`step(subWorkflow, { inFn, outFn })`).
+- **Desired state** is `red.yml`, overlaid with `COLORS_PAR_*` variables onto
+  flat kebab-case keys (`COLORS_PAR_DO_TOKEN` → `do-token`).
+- **Dry-run, progress and lifecycle preflight** are optional helpers built on
+  advice and plain steps, not engine features.
 
 ## Modules
 
 ```ts
-import { workflow, run, step, adviceAdd } from "red/workflow";
-import * as tofu from "red/tofu";
-import * as ansible from "red/ansible";
-import { scaffold } from "red/scaffold";
+import { workflow, run, step, adviceAdd, failed, StepError } from "red/workflow";
+import * as advice from "red/advice";
 import * as dryRun from "red/dry-run";
 import * as progress from "red/progress";
-import { runCli, execCli } from "red/cli";
-import { schemaGate } from "red/gates";
-import { runtime } from "red/runtime";
+import { preflight } from "red/lifecycle";
+import { runCli, execCli, readPars, parName, findUp } from "red/cli";
+import { runtime } from "red/runtime"; // runtime.log, stubbable in tests
 ```
 
-The root export (`red`) re-exports the public API and namespaces.
+The root export (`red`) re-exports the workflow and CLI API plus the
+`advice`, `dryRun`, `progress` and `lifecycle` namespaces and `runtime`.
 
-`runtime.exec` captures subprocess output. `runInherit` from `red/process`
-delegates to the mutable `runtime.execInherit` method and inherits terminal
-streams. Both preserve ordinary exit codes, return 127 for spawn failures,
-and convert negative signal statuses to `128 + signal`. Both accept `cwd`
-and `env`; only `runtime.exec` supports `timeoutMs`.
+## Example
 
-## Examples
-
-Each example's `./red` is a self-contained Bun script that imports this library
-by relative path and uses text imports for templates.
+[`examples/hello`](examples/hello) is a small package whose steps call local
+command-line tools (`uname`, `mkdir`, `cat`, `rm`). It fans out one branch per
+name, joins them, and supports `create`, `delete` and `--dry-run`:
 
 ```sh
-cd examples/zookeeper
+cd examples/hello
 ./red create --dry-run
 ./red create
-./red delete
-
-cd ../multi-zookeeper
-./red create --dry-run
-./red create
-./red delete
-
-cd ../once
-./red create --dry-run
-./red create
-./red delete
-
-cd ../multi-once
-./red create --dry-run   # offline path; real create needs an S3 bucket
-./red create
-./red delete
-
-cd ../floci-zookeeper
-./red create --dry-run   # offline path; real create needs Linux + Docker + floci
-./red create
+COLORS_PAR_MESSAGE=hi ./red create
 ./red delete
 ```
 
 ## Desired state YAML
 
-`runCli` loads `red.yml` by default, stamps `"red/event"`, and runs the
-workflow. Namespaced string keys can be unquoted in Bun YAML:
+`runCli` loads `red.yml` by default, overlays `COLORS_PAR_*`, stamps
+`"red/event"` and `"red/state-file"`, and runs the workflow:
 
 ```yaml
-zk/workdir: work
-zk/servers:
-  - {id: 1, name: zk1, ip: 10.0.0.1}
+workdir: work
+message: hello
+names: [alice, bob]
 ```
 
 Quote version-like values such as `"3.10"`; YAML would otherwise parse them as
-numbers.
-
-## Kubernetes controllers
-
-`red/kubernetes` and `red/kubernetes/client` provide bounded polling workers, state-identity locks,
-optimistic status writes, finalization, and explicit-context kubectl transport.
-See the [controller contract](docs/kubernetes.md) for callbacks and lifecycle rules.
+numbers. Keep credentials in `COLORS_PAR_*` variables, never in the file.

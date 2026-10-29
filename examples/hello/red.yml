@@ -1,0 +1,7 @@
+# Desired state for the hello example (see ./red). Keys are flat kebab-case
+# so any of them can be overridden at run time, e.g. COLORS_PAR_MESSAGE=hi.
+workdir: work      # relative to this file
+message: hello
+names:
+  - alice
+  - bob

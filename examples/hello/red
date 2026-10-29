@@ -1,0 +1,102 @@
+#!/usr/bin/env bun
+// -*- mode: typescript-ts; -*-
+// A tiny red package whose steps call local command-line tools directly.
+//
+//   ./red create              write one greeting file per name, then read them back
+//   ./red create --dry-run    log what would run; touch nothing
+//   ./red delete              remove the greeting files and the empty workdir
+//
+// Graph: hello/check -> hello/host -> hello/greet (one branch per name) -> hello/report
+// hello/greet fans out through nextFn; the branches join at hello/report.
+//
+// In-repo example: red is imported by relative path. A real package would
+// depend on a pinned red release instead.
+
+import { dirname, isAbsolute, join } from "node:path";
+import { execCli } from "../../src/cli.ts";
+import * as dryRun from "../../src/dry-run.ts";
+import { preflight } from "../../src/lifecycle.ts";
+import * as progress from "../../src/progress.ts";
+import type { Opts, StepFn } from "../../src/workflow.ts";
+import { failed, StepError, workflow } from "../../src/workflow.ts";
+
+// Run a command and return its trimmed stdout; a non-zero exit throws a
+// StepError, which the step boundary turns into "red/exit"/"red/err".
+async function sh(cmd: string[]): Promise<string> {
+  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const [out, err, exit] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exit !== 0) throw new StepError(`${cmd.join(" ")} failed: ${err.trim()}`, { exit });
+  return out.trim();
+}
+
+// Relative paths in red.yml resolve against red.yml, not the current directory.
+const workdir = (opts: Opts): string => {
+  const dir = String(opts.workdir ?? "work");
+  return isAbsolute(dir) ? dir : join(dirname(String(opts["red/state-file"])), dir);
+};
+
+const fileFor = (opts: Opts, name: string) => join(workdir(opts), `${name}.txt`);
+
+const check: StepFn = (opts) =>
+  preflight(opts, {
+    defaults: { message: "hello" },
+    validators: [
+      (o) => Array.isArray(o.names) && o.names.length > 0 ? [] : ["names: list at least one name"],
+      (o) => (o.names ?? []).every((n: unknown) => typeof n === "string" && /^[a-z0-9-]+$/.test(n))
+        ? [] : ["names: use lowercase letters, digits and dashes"],
+    ],
+  });
+
+const host: StepFn = async (opts) => ({ ...opts, "hello/host": await sh(["uname", "-sm"]) });
+
+const greet: StepFn = async (opts) => {
+  const name = opts["hello/name"] as string;
+  const file = fileFor(opts, name);
+  if (opts["red/event"] === "delete") {
+    await sh(["rm", "-f", file]);
+    return opts;
+  }
+  await sh(["mkdir", "-p", workdir(opts)]);
+  await Bun.write(file, `${opts.message}, ${name}, from ${opts["hello/host"]}\n`);
+  return { ...opts, "hello/file": file };
+};
+
+const report: StepFn = async (opts) => {
+  if (opts["red/event"] === "delete") {
+    // rmdir only removes an empty directory; anything else stays put
+    await sh(["sh", "-c", `rmdir "$1" 2>/dev/null || true`, "sh", workdir(opts)]);
+    console.log(`removed greetings from ${workdir(opts)}`);
+    return opts;
+  }
+  const files = (opts["red/branches"] as Opts[] ?? [opts]).map((b) => b["hello/file"] as string).sort();
+  const text = await sh(["cat", ...files]);
+  console.log(text);
+  return { ...opts, "hello/files": files };
+};
+
+export const hello = dryRun.advise(progress.advise(workflow({
+  start: "hello/check",
+  wireFn: (step) => {
+    switch (step) {
+      case "hello/check": return [check, "hello/host"];
+      case "hello/host": return [host, "hello/greet"];
+      case "hello/greet": return [greet, "hello/report"];
+      case "hello/report": return [report];
+    }
+  },
+  nextFn: (step, defaultNext, opts) => {
+    if (failed(opts)) return [];
+    if (step === "hello/host") {
+      return (opts.names as string[]).map((name) => ["hello/greet", { ...opts, "hello/name": name }] as const);
+    }
+    return (defaultNext ?? []).map((s) => [s, opts] as const);
+  },
+})), ["hello/greet", "hello/report"]);
+
+if (import.meta.main) {
+  await execCli(hello, Bun.argv.slice(2), { allowedEvents: ["create", "delete"] });
+}

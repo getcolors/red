@@ -1,15 +1,22 @@
 # red — specification
 
-`red` is the TypeScript/Bun implementation of the green workflow model: a
-library for building idempotent devops CLIs — desired state in YAML, workflows
-as step graphs threaded by a plain object, template-scaffolded config files,
-and optional event-aware OpenTofu and Ansible steps — a package can use them, but does not need them.
+`red` is the TypeScript/Bun implementation of the Colors workflow model. Green
+(Clojure/Babashka) is canonical, red (TypeScript/Bun) and blue (Python/uv)
+implement the same model: steps are `opts -> opts` functions, a workflow is a
+static `wireFn` graph plus a dynamic `nextFn`, branches fan out and join,
+advice layers cross-cutting behaviour, and desired state is YAML overlaid with
+`COLORS_PAR_*` environment variables. Dry-run, progress and lifecycle
+preflight are optional advice-level helpers.
+
+red is a foundation for deployment code written by coding agents. Steps call
+cloud CLIs or APIs directly; the library has no OpenTofu, Ansible or template
+integration. [PocketDeploy](https://github.com/pocketcontext/pocketdeploy),
+built on blue, is the starter package.
 
 The port is **behavioral**: green is the canonical model, and the TypeScript
 test suite locks that behavior into red's language-specific contract.
 Conventions stay structurally identical to green's — a green project ports to
-red by mechanical rename — but this repository now contains only red's
-TypeScript/Bun implementation.
+red by mechanical rename.
 
 ## Naming
 
@@ -18,13 +25,12 @@ Everything called `green` is called `red`:
 | green                      | red                          |
 |----------------------------|------------------------------|
 | `:green/exit` etc.         | `"red/exit"` etc.            |
-| `:green.scaffold/written`  | `"red.scaffold/written"`     |
 | `green.edn`                | `red.yml`                    |
 | `./green` (babashka)       | `./red` (Bun)                |
 | `green.workflow` ns        | `red/workflow` module        |
 
-Namespaced keywords become namespaced **string keys**: `:zk/servers` →
-`"zk/servers"`. Keyword *values* become plain strings: `:create` → `"create"`.
+Namespaced keywords become namespaced **string keys**: `:app/servers` →
+`"app/servers"`. Keyword *values* become plain strings: `:create` → `"create"`.
 The engine reserves the `red/*` and `red.*/*` namespaces for its control keys
 (`"red/exit"`, `"red/err"`, `"red/trace"`, `"red/event"`, `"red/dry-run"`,
 `"red/step"`, `"red/branches"`, plus private keys such as
@@ -36,8 +42,8 @@ namespace.
 All cross-step state is one plain object threaded through the graph. The base
 type is open (`Opts = { [key: string]: unknown }` plus the typed engine keys);
 steps read the keys they declare and pass everything else through untouched.
-Per-step contracts are expressed as Zod schemas where wanted (`z.infer` types
-the step's reads); there is deliberately no closed "all keys" interface.
+There is deliberately no closed "all keys" interface; a package validates the
+keys it needs (see `lifecycle.preflight`).
 
 The engine recursively freezes plain objects and arrays at each step boundary,
 including nested values inside already-frozen containers. Map, Set, Date,
@@ -53,7 +59,7 @@ branch.
 ## Steps, wiring, workflows
 
 - A **step** is `(opts) => Opts | Promise<Opts>`, named by a namespaced
-  string (`"zk/node"`).
+  string (`"app/node"`).
 - **wireFn** `(step, runOpts) => [fn, ...nextSteps] | undefined` — the static
   happy-path graph for this run; may depend on stable run-level inputs such as
   `"red/event"`. `runOpts` is the run's *initial* opts, stable for the whole
@@ -143,73 +149,39 @@ Emacs nadvice combinators, workflow-scoped, pure values:
 - `advicePlan(wfOrChain, step)` shows the composed stack outermost-first with
   provenance (`scope: "step"|"all"`, `level` = chain depth).
 
-## Config: red.yml
+## Config: red.yml and COLORS_PAR_*
 
 Desired state is pure data in YAML (comments encouraged), parsed with
-`Bun.YAML.parse` (verified YAML 1.2 on Bun 1.3.14: `no` is a string, `zk/…`
-keys parse unquoted). Loaded keys land in opts unchanged. Caveat to document
-in every project: version-like values (`3.10`) must be quoted or YAML reads
-them as numbers. Validation is Zod at the boundary and/or `before-while`
-gates; **gates validate, never transform** — Zod's default key-stripping
-would silently drop other namespaces' keys, so gate helpers return the
-original opts, never the parse output.
+`Bun.YAML.parse` (verified YAML 1.2 on Bun 1.3.14: `no` is a string,
+`app/…` keys parse unquoted). Loaded keys land in opts unchanged, plus
+`"red/state-file"`: the absolute path of the file, so a package resolves its
+relative paths against the file rather than the current directory. Caveat to
+document in every project: version-like values (`3.10`) must be quoted or YAML
+reads them as numbers.
 
-## Scaffolding and templates
+After loading, `readPars(opts, env)` overlays every `COLORS_PAR_<UPPER_SNAKE>`
+variable onto the flat kebab-case key it names (`COLORS_PAR_DO_TOKEN` →
+`do-token`; `parName(key)` is the inverse). The value is coerced to the type
+of the key's existing value: `true`/`false` for booleans, decimal integers for
+integers, a string otherwise. One namespace is shared by green, red and blue;
+there is no per-colour prefix. Credentials belong in these variables, never in
+`red.yml`. Namespaced keys (`app/x`) cannot be overlaid; keep overridable
+inputs flat.
 
-A spec is a flat seq of `{template, target, data, opts?}`:
+Validation is the package's job, typically as its first step or a
+`before-while` advice; validators return the original opts, never a
+transformed copy.
 
-- `template` is `{name, content}` — content is the template text, name is for
-  messages. **The module graph is the classpath**: packages own their
-  templates via Bun text imports
-  (`import mainTf from "./main.tf" with { type: "text" }`), so templates
-  travel through relative imports, npm install, auto-install, `bun build`
-  bundles, and compiled binaries (verified on Bun 1.3.14). There is no
-  runtime template lookup.
-- `target` is itself rendered against `data` (paths are templates too).
-- On `"red/event": "delete"` the same specs name the targets to remove, with
-  immediate empty-parent-directory pruning.
-- Rendering is Selmer's template language. Delimiter overrides let Ansible
-  files keep `{{ }}`/`{% %}` for Jinja2. Values are HTML-escaped by default;
-  `|safe` bypasses. Variables, `for`, `if`, `not-empty`, sorted collections,
-  custom delimiters, and missing values cover production templates.
+## Lifecycle preflight
 
-## tofu and ansible
+`lifecycle.preflight(opts, config, env?)` is a reusable first step:
+`defaults` are merged under the opts, an optional `overlay(opts, env)` runs,
+then every `validators[i](opts, env, {event, real})` contributes error
+strings (`real` is false under dry-run). Any errors → `"red/exit": 2` with
+the errors joined by newlines in `"red/err"`; otherwise `afterValidate` (if
+given) produces the result, else `"red/exit": 0`.
 
-Event-aware helper steps:
-
-- `tofuStep(opts, {dir, outputKey?})`: non-`"delete"` events → `init` +
-  `apply` then `tofu output -json` merged under `outputKey` (default
-  `"tofu/outputs"`, keep it namespaced); `"delete"` → `init` + `destroy`.
-  Backends attach as `before` advice (`localBackendAdvice`,
-  `s3BackendAdvice`, `gcsBackendAdvice`, `r2BackendAdvice`, generic
-  `backendAdvice`). Per-command environments keep credentials out of files;
-  `tofuWithSpec` supports build, and deterministic HCL/JSON helpers match
-  Green's artifact bytes.
-- `ansibleStep(opts, {...})`: non-`"delete"` → the `create` playbook
-  (`create.yml` default), `"delete"` → the `delete` one, via
-  `ansible-playbook` in `dir`; `privateKey`, `user`, `extraVars` (JSON `-e`),
-  `hostKeyChecking: false` (exports `ANSIBLE_HOST_KEY_CHECKING=False`).
-  Parsed PLAY RECAP lands under `recapKey` (default `"ansible/recap"`).
-  `inventoryAdvice(fileFn, groups)` is a `before` advice writing an INI
-  inventory; `inventoryIni` renders groups/hosts/vars deterministically
-  (sorted). `ansibleWithSpec` scaffolds then runs (create) or runs then
-  removes (delete).
-- Captured subprocesses use `runtime.exec(cmd, {cwd, env, timeoutMs})`.
-  `runInherit(cmd, opts)` delegates to `runtime.execInherit(cmd, opts)` with
-  inherited terminal streams and supports `cwd` and `env`. Inherited execution
-  does not implement `timeoutMs`. Both methods preserve ordinary exit codes,
-  return 127 for spawn failures, and convert negative signal statuses to
-  `128 + signal`. On POSIX, SIGTERM returns 143.
-  Captured execution returns 124 on timeout.
-  On POSIX, timed commands run in a separate process group and timeout kills
-  that group, including children whose original parent has already exited.
-  On Windows, timeout requests tree termination with `taskkill /T /F`.
-  Timeout cleanup waits at most one additional second for exit and output.
-  Descendants that deliberately leave the POSIX group cannot be killed through
-  that group, but cannot keep the timeout waiting on inherited output pipes.
-  Tests can replace either method on the mutable `runtime` object.
-
-## dry-run and progress
+## Dry-run and progress
 
 Built on advice, not the engine:
 
@@ -220,7 +192,9 @@ Built on advice, not the engine:
 - `progress.advise(wf)` attaches an `around` advice (id
   `"red.progress/progress"`) to every step: `>>> <step> (<event>)` on entry,
   `<<< <step> (<n>ms)` on exit, reading `"red/step"` from opts.
-- Both log through `runtime.log` so tests can capture output.
+- Both log through `runtime.log`, a mutable seam tests replace to capture
+  output. `runtime` has no subprocess runner: steps spawn commands themselves
+  (`Bun.spawn`, `Bun.$`) or call APIs with `fetch` or an SDK client.
 
 ## CLI
 
@@ -232,41 +206,43 @@ returns final opts; exit 2 with a message on usage/missing-file/parse errors.
 `execCli(wf, args)` prints `"red/err"`/`"red/trace"` to stderr and
 `process.exit`s with `"red/exit"`.
 
+`CliConfig` options: `defaultFile` (default `red.yml`), `searchParents`
+(find the default file in the nearest ancestor directory via `findUp`) and
+`allowedEvents` (any other event is a usage error).
+
 ## The ./red launcher
 
 A project's `./red` is a **self-contained Bun script**: `#!/usr/bin/env bun`,
-executable, no package.json/node_modules/build step. It holds the workflow
-definition, advice wiring, and the `execCli` call, plus text imports of its
-local templates. In-repo examples import red by relative path; external
-consumers rely on Bun auto-install with a **version-pinned** specifier
-(`import { … } from "red@x.y.z"`) — never unpinned. Consequences:
+executable, no build step. It holds the workflow definition, advice wiring,
+the steps (which call CLIs or APIs directly) and the `execCli` call. The
+in-repo example imports red by relative path; external consumers should
+depend on a pinned version — a version-pinned npm specifier once red is
+published, until then a pinned git dependency in `package.json`; never an
+unpinned specifier. `import.meta.dir` locates the script; `import.meta.main`
+distinguishes launch from import, so the workflow can be exported for tests.
 
-- Publishing red to npm is a v1 release requirement (`github:` specifiers do
-  not work in import paths; until then external consumers need a minimal
-  package.json with a git dep).
-- Auto-install deactivates if any `node_modules` exists up the tree —
-  document it.
-- `import.meta.dir` replaces the `*file*` dance; `import.meta.main` replaces
-  the launched-as-script check; a `run(...args)` export stays REPL/test
-  friendly.
+## Example
+
+`examples/hello` is the reference package: `hello/check` (lifecycle
+preflight) → `hello/host` (`uname -sm`) → `hello/greet` fanned out per name by
+`nextFn` (writes one file per name on create, `rm -f` on delete) → the
+`hello/report` join (`cat` the files back on create, `rmdir` the empty
+workdir on delete). Progress advice wraps every step; dry-run advice skips
+`hello/greet` and `hello/report`. It is offline and harmless.
 
 ## Testing
 
-`bun test`; files auto-discovered as `test/*.test.ts` (no runner lists to
-maintain). The zookeeper end-to-end suite drives real `tofu` over
-locals/outputs-only HCL and skips via `describe.skipIf(!Bun.which("tofu"))`.
-tofu/ansible unit tests stub `runtime.exec` instead of shelling out.
+`bun test`; files auto-discovered as `test/*.test.ts`. Engine, advice, CLI,
+dry-run, progress and lifecycle behaviour are unit-tested in-process;
+`test/hello-example.test.ts` drives `examples/hello/red` as a subprocess
+(create, delete, dry-run, `COLORS_PAR_*` overlay, validation and command
+failure). `bun run typecheck` runs `tsc --noEmit` over `src` and `test` (the
+extensionless launcher is exercised by its test rather than by `tsc`).
 
 ## Repository layout
 
-TypeScript source lives in `src/*.ts`; tests live in `test/*.test.ts`; shared
-text-imported templates live in `test-resources/`. Examples are self-contained
-Bun launchers under `examples/*/red` with desired state in `red.yml`. The
-library's own `package.json` exists for publication and the zod dependency;
-consumers' launcher scripts need none once red is available as a version-pinned
-package import.
+TypeScript source lives in `src/*.ts`; tests live in `test/*.test.ts`. The
+example is a self-contained Bun launcher at `examples/hello/red` with desired
+state in `red.yml`. red has no runtime dependencies; `package.json` exists for
+publication and the dev toolchain.
 
-## Runtime resource scopes
-
-`red/scope` exports `withScope` for ordered process/resource finalization.
-See [resource scopes](docs/resource-scopes.md).
