@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>red — specification</title>
-<meta name="description" content="Specification of red, the TypeScript/Bun workflow SDK of Colors: steps as opts -> opts functions, a wireFn graph with a dynamic nextFn, layered advice, and YAML desired state with COLORS_PAR_* overrides.">
+<meta name="description" content="Specification of red, the TypeScript/Bun workflow SDK of Colors: DAG execution, composable subworkflows, layered advice, and YAML configuration with COLORS_PAR_* overrides.">
 <link rel="icon" href="https://www.getcolors.ai/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -140,10 +140,10 @@
 
 <p class="eyebrow">Specification · TypeScript / Bun</p>
 <h1>red</h1>
-<p class="meta">2026-10-29 · <a href="https://github.com/getcolors/red/blob/main/SPEC.md">SPEC.md</a></p>
+<p class="meta">2026-10-31 · <a href="https://github.com/getcolors/red/blob/main/SPEC.md">SPEC.md</a></p>
 
 <p class="lede">Coding agents write deployment code directly: the provider CLI and API calls, the ordering, the retries and the checks that Terraform and Ansible once had to declare. <strong>The colors are the foundation for that code</strong>: three workflow SDKs, Green, Red and Blue, that share one model in Clojure, TypeScript and Python.</p>
-<p>red is the TypeScript/Bun color. Build your own package on it, or start from <a href="https://github.com/pocketcontext/pocketdeploy">PocketDeploy</a>, the starter package built on Blue. Steps call cloud CLIs or APIs directly; red has no OpenTofu or Ansible integration.</p>
+<p>red is the TypeScript/Bun color: DAG execution, composable subworkflows and layered advice. Applications own their CLI, validation, planning, progress and durable recovery. Build your own package on it, or start from <a href="https://github.com/pocketcontext/pocketdeploy">PocketDeploy</a>, the starter package built on Blue. Steps call cloud CLIs or APIs directly; red has no OpenTofu or Ansible integration.</p>
 
 <div class="colors" role="list">
   <a class="color color-green" role="listitem" href="https://getcolors.github.io/green/"><b>green</b><small>Clojure / Babashka · canonical</small></a>
@@ -159,10 +159,9 @@
     <li><a href="#steps">Steps and errors</a></li>
     <li><a href="#workflows">Workflows: wireFn and nextFn</a></li>
     <li><a href="#parallelism">Parallelism and joins</a></li>
+    <li><a href="#composition">Subworkflows</a></li>
     <li><a href="#advice">Advice</a></li>
     <li><a href="#config">YAML config and COLORS_PAR_*</a></li>
-    <li><a href="#helpers">Dry-run, progress, lifecycle</a></li>
-    <li><a href="#cli">CLI and the ./red launcher</a></li>
     <li><a href="#example">The example</a></li>
     <li><a href="#testing">Testing</a></li>
     <li><a href="#api">API index</a></li>
@@ -171,10 +170,10 @@
 
 <h2 id="philosophy">1. Philosophy</h2>
 <ul>
-  <li><strong>One model, three languages.</strong> Green is canonical; red and blue port its behaviour, locked by their test suites. A project ports between colors by mechanical rename: <code>:green/exit</code> → <code>"red/exit"</code> → <code>"blue/exit"</code>, <code>./green</code> → <code>./red</code> → <code>./blue</code>.</li>
+  <li><strong>One model, three languages.</strong> Green is canonical; red and blue implement the same execution, composition and advice semantics. Application code still uses each language’s APIs and tools.</li>
   <li><strong>Plain data, plain functions.</strong> State is one open object; a step is a function from it to it. No class hierarchy, no resource DSL, no state engine.</li>
   <li><strong>Code, written by agents.</strong> A step calls the provider's CLI or API itself. The program is cheap to write and readable to review; nothing is hidden behind a second language.</li>
-  <li><strong>Cross-cutting behaviour is advice.</strong> Dry-run, progress, validation and retries wrap steps; the engine stays small.</li>
+  <li><strong>Cross-cutting behaviour is advice.</strong> Applications can attach reporting, guards and other policies without changing steps. These policies are application code, not bundled SDK helpers.</li>
   <li><strong>Errors are values.</strong> Failures flow through the graph as data and can be routed, not thrown past the caller.</li>
   <li><strong>No runtime dependencies.</strong> red needs Bun and nothing else.</li>
 </ul>
@@ -182,7 +181,7 @@
 <h2 id="opts">2. The opts contract</h2>
 <p>All cross-step state is one plain object threaded through the graph. The type is open (<code>interface Opts { [key: string]: any }</code>); steps read the keys they need and pass everything else through untouched.</p>
 <ul>
-  <li>The engine owns <code>red/*</code> and private <code>red.*/*</code> keys: <code>"red/exit"</code>, <code>"red/err"</code>, <code>"red/trace"</code>, <code>"red/event"</code>, <code>"red/dry-run"</code>, <code>"red/step"</code>, <code>"red/branches"</code>, <code>"red/state-file"</code>, and the private <code>"red.workflow/inherited"</code>.</li>
+  <li>The engine owns <code>red/*</code> and private <code>red.*/*</code> keys: <code>"red/exit"</code>, <code>"red/err"</code>, <code>"red/trace"</code>, <code>"red/step"</code>, <code>"red/branches"</code>, and the private <code>"red.workflow/inherited"</code>.</li>
   <li>Project data uses its own namespace-like keys (<code>"app/servers"</code>). Desired-state inputs that may be overridden from the environment stay flat and kebab-case (<code>do-token</code>).</li>
   <li>Step input is recursively frozen at each step boundary. Map, Set, Date, typed arrays, class instances and accessor properties fail before the step runs. Steps return new objects with spread syntax.</li>
 </ul>
@@ -195,8 +194,7 @@
   <li><code>throw new StepError(message, { exit })</code> chooses the exit code; any other throw is exit 1.</li>
   <li>A non-object return (a forgotten <code>return</code>) fails through the same contract.</li>
   <li>Without a <code>nextFn</code>, a failed step has no successors and its branch halts. With one, routing a failure to cleanup or retry is user logic.</li>
-  <li>Exit 2 is reserved for usage and configuration errors.</li>
-  <li>Steps must await everything they start; <code>execCli</code> turns a stray unhandled rejection into a nonzero process exit.</li>
+  <li>Steps must await everything they start; applications own process-level error handling and command exit policies.</li>
 </ul>
 <p class="caption"># A step that calls a CLI directly</p>
 <pre><code>async function sh(cmd: string[]): Promise&lt;string&gt; {
@@ -213,10 +211,9 @@ const host: StepFn = async (opts) =&gt; ({ ...opts, "hello/host": await sh(["una
 <h2 id="workflows">4. Workflows: wireFn and nextFn</h2>
 <p><code>workflow({ start, end?, wireFn, nextFn? })</code> builds an immutable workflow value. Every constructor and advice function is pure, so workflows can be shared and branched freely.</p>
 <ul>
-  <li><strong><code>wireFn(step, runOpts) =&gt; [fn, ...nextSteps] | undefined</code></strong> is the static happy-path graph. <code>runOpts</code> is the run's initial opts, stable for the whole run, so the graph may depend on <code>"red/event"</code> without flapping.</li>
+  <li><strong><code>wireFn(step, runOpts) =&gt; [fn, ...nextSteps] | undefined</code></strong> is the static happy-path graph. <code>runOpts</code> is the run's initial opts, stable for the whole run, so the graph may depend on <code>"app/event"</code> without flapping.</li>
   <li><strong><code>nextFn(step, defaultNext, opts) =&gt; [[nextStep, opts], ...]</code></strong> routes dynamically: fan-out, conditional branches, error paths. Returning <code>[]</code> or <code>null</code> ends the branch.</li>
   <li><code>end</code> is an inclusive slice boundary: the step runs, then the workflow stops.</li>
-  <li><code>step(subWorkflow, { inFn?, outFn? })</code> embeds a workflow as an ordinary step. <code>inFn</code> shapes the sub-workflow's opts; <code>outFn(opts, subResult)</code> merges the result back (default: the sub-result).</li>
   <li><code>run(wf, opts)</code> runs a workflow and returns the final opts.</li>
 </ul>
 <pre><code>const wf = workflow({
@@ -247,7 +244,17 @@ const host: StepFn = async (opts) =&gt; ({ ...opts, "hello/host": await sh(["una
   <li>Final result: no terminals → <code>{"red/exit": 0}</code>; one → it; several → the first failed one, else the last successful one.</li>
 </ol>
 
-<h2 id="advice">6. Advice</h2>
+<h2 id="composition">6. Subworkflows</h2>
+<p><code>step(subWorkflow, { inFn?, outFn? })</code> turns a workflow into an ordinary step. Wire it, advise it or fan it out like any other operation. <code>inFn</code> shapes child inputs; <code>outFn(parentOpts, childResult)</code> adapts the result back.</p>
+<p>By default the child result, including failure keys, becomes the parent step result. A custom <code>outFn</code> must preserve or deliberately handle failures. Application context flows in opts; a rebuilding <code>inFn</code> must carry the keys its child needs. Parent advice is inherited even across that adapter. Subworkflows supply composition, not a persistent recovery journal.</p>
+<pre><code>const child = workflow({
+  start: "child/prepare",
+  wireFn: (name) =&gt; name === "child/prepare" ? [prepare] : undefined,
+});
+// Use inside the parent wireFn:
+// case "app/prepare": return [step(child), "app/verify"];</code></pre>
+
+<h2 id="advice">7. Advice</h2>
 <p>Emacs <code>nadvice</code>-style combinators, scoped to a workflow value:</p>
 <div class="table-wrap"><table>
   <tr><th>how</th><th>behaviour</th></tr>
@@ -265,58 +272,41 @@ const host: StepFn = async (opts) =&gt; ({ ...opts, "hello/host": await sh(["una
   <li><code>adviceAdd(wf, step, how, id, fn, props?)</code> targets one step; <code>adviceAddAll(wf, how, id, fn, props?)</code> targets every step. <code>adviceRemove</code> / <code>adviceRemoveAll</code> remove by id.</li>
   <li>Stacking: most recently added is outermost, across both registries, unless <code>depth</code> (−100..100, default 0) overrides; lower depth is more outward. Re-adding an id replaces it.</li>
   <li>Truthiness is Clojure's: only <code>null</code>, <code>undefined</code> and <code>false</code> are falsy. For <code>after-while</code>/<code>after-until</code> a step result is true when its <code>"red/exit"</code> is 0 or absent.</li>
-  <li>Advice is inherited through <code>step</code> embeds by flat step name; ancestor advice stacks outside child advice, and an ancestor entry with the same id replaces the child's.</li>
+  <li>Advice is inherited through <code>step</code> embeds by flat step name; ancestor advice stacks outside child advice at equal depth, and an ancestor entry with the same id replaces the child's.</li>
   <li><code>advicePlan(wfOrChain, step)</code> lists the composed stack outermost-first with <code>{id, how, depth, seq, scope, level}</code>.</li>
 </ul>
 
-<h2 id="config">7. YAML config and COLORS_PAR_*</h2>
-<p>Desired state is pure data in <code>red.yml</code>, parsed by <code>Bun.YAML.parse</code> (YAML 1.2: <code>no</code> is a string; <code>app/…</code> keys parse unquoted). Loaded keys land in opts unchanged, plus <code>"red/state-file"</code>, the file's absolute path, so a package resolves relative paths against the file. Quote version-like values such as <code>"3.10"</code>.</p>
-<p>Every <code>COLORS_PAR_&lt;UPPER_SNAKE&gt;</code> environment variable is then overlaid onto the flat kebab-case key it names: <code>COLORS_PAR_DO_TOKEN</code> → <code>do-token</code>. The value is coerced to the type of the existing value (<code>true</code>/<code>false</code> for booleans, decimal integers for integers, otherwise a string). The namespace is shared by all three colors; there is no per-color prefix. Credentials live in these variables, never in the YAML file.</p>
+<h2 id="config">8. YAML config and COLORS_PAR_*</h2>
+<p><code>loadYaml(text)</code> parses YAML with <code>Bun.YAML.parse</code> (YAML 1.2: <code>no</code> and dates remain strings; <code>app/…</code> keys parse unquoted). It returns an empty object for empty/null input and otherwise the parsed data. Applications read files, validate mappings and schemas, and resolve relative paths. Quote version-like values such as <code>"3.10"</code>.</p>
+<p><code>readPars(opts, env?)</code> overlays <code>COLORS_PAR_&lt;UPPER_SNAKE&gt;</code> variables onto flat kebab-case keys: <code>COLORS_PAR_DO_TOKEN</code> → <code>do-token</code>. Existing booleans accept <code>true</code>/<code>false</code>, existing integers accept decimal integers, and other values remain strings. <code>parName(key)</code> maps keys to environment names. The namespace is shared by all colors; credentials stay outside YAML.</p>
+<p>The historical <code>red/cli</code> import path remains for these helpers only. There is no generic CLI, file discovery, lifecycle preflight or bundled dry-run/progress policy. Applications can implement policies with advice. Engine-level <code>start</code>/<code>end</code> slicing remains available.</p>
 <pre><code>workdir: work      # relative to this file
 message: hello
 names:
   - alice
   - bob</code></pre>
 
-<h2 id="helpers">8. Dry-run, progress, lifecycle</h2>
-<p>Optional helpers built on advice and plain steps; the engine knows nothing about them.</p>
-<ul>
-  <li><strong><code>dryRun.advise(wf, steps)</code></strong> adds an <code>around</code> advice (id <code>"red.dry-run/skip"</code>) to the listed side-effecting steps. When <code>"red/dry-run"</code> is set (by <code>--dry-run</code>) it logs <code>dry-run: would run &lt;step&gt; (&lt;event&gt;)</code> and skips the step.</li>
-  <li><strong><code>progress.advise(wf)</code></strong> adds an all-step <code>around</code> advice (id <code>"red.progress/progress"</code>) logging <code>&gt;&gt;&gt; &lt;step&gt; (&lt;event&gt;)</code> on entry and <code>&lt;&lt;&lt; &lt;step&gt; (&lt;n&gt;ms)</code> on exit.</li>
-  <li><strong><code>lifecycle.preflight(opts, config, env?)</code></strong> is a reusable first step: merge <code>defaults</code> under opts, apply an optional <code>overlay</code>, run every validator <code>(opts, env, {event, real})</code>, and fail with exit 2 and all errors joined if any report; otherwise call <code>afterValidate</code> or return exit 0. <code>real</code> is false under dry-run.</li>
-  <li>Both advice helpers log through <code>runtime.log</code>, a mutable seam tests replace. red has no subprocess runner: steps spawn commands or call APIs themselves.</li>
-</ul>
-
-<h2 id="cli">9. CLI and the ./red launcher</h2>
-<pre><code>./red &lt;event&gt; [-f|--file red.yml] [--start step] [--end step] [--dry-run]</code></pre>
-<ul>
-  <li><code>runCli(wf, args, config?)</code> is the non-exiting, testable form: parse arguments, load the YAML, overlay <code>COLORS_PAR_*</code>, stamp <code>"red/event"</code> (and <code>"red/dry-run"</code>), apply <code>--start</code>/<code>--end</code>, run, and return the final opts. Usage, missing-file and parse errors return exit 2.</li>
-  <li><code>execCli(wf, args?, config?)</code> prints <code>"red/err"</code> and <code>"red/trace"</code> to stderr and exits with <code>"red/exit"</code>.</li>
-  <li><code>CliConfig</code>: <code>defaultFile</code> (default <code>red.yml</code>), <code>searchParents</code> (find it in the nearest ancestor via <code>findUp</code>), <code>allowedEvents</code> (anything else is a usage error). Events are otherwise arbitrary strings.</li>
-</ul>
-<p>A project's <code>./red</code> is a self-contained, executable Bun script (<code>#!/usr/bin/env bun</code>) holding the steps, the workflow, its advice and the <code>execCli</code> call. Depend on red by a pinned version: a version-pinned npm specifier once published, until then a pinned git dependency in <code>package.json</code>; never an unpinned specifier.</p>
-
-<h2 id="example">10. The example</h2>
+<h2 id="example">9. The example</h2>
 <p><a href="https://github.com/getcolors/red/tree/main/examples/hello"><code>examples/hello</code></a> is a small, offline package whose steps call local command-line tools:</p>
 <pre><code>hello/check  → hello/host → hello/greet (one branch per name) → hello/report
-preflight      uname -sm    create: write &lt;name&gt;.txt             create: cat the files
+validation     uname -sm    create: write &lt;name&gt;.txt             create: cat the files
                             delete: rm -f &lt;name&gt;.txt             delete: rmdir the workdir</code></pre>
-<p>Progress advice wraps every step; dry-run advice skips <code>hello/greet</code> and <code>hello/report</code>.</p>
+<p>The application owns argument parsing, configuration and validation. <code>hello/greet</code> embeds a child workflow running <code>hello/write</code> then <code>hello/verify</code>, checking each write/removal before returning to the parent. Application-defined all-step advice logs both parent and child stages; preview advice skips <code>hello/greet</code> and <code>hello/report</code>. These policies live in the example, not the SDK.</p>
 <pre><code>cd examples/hello
 ./red create --dry-run
 ./red create
 COLORS_PAR_MESSAGE=hi ./red create
 ./red delete</code></pre>
 
-<h2 id="testing">11. Testing</h2>
+<h2 id="testing">10. Testing</h2>
 <ul>
-  <li><code>bun test</code> discovers <code>test/*.test.ts</code>. Engine, advice, CLI, dry-run, progress and lifecycle behaviour are tested in-process; tests capture logs by replacing <code>runtime.log</code>.</li>
-  <li><code>test/hello-example.test.ts</code> drives the real <code>examples/hello/red</code> launcher as a subprocess: create, delete, dry-run, <code>COLORS_PAR_*</code> overlay, validation and command failure.</li>
-  <li><code>bun run typecheck</code> runs <code>tsc --noEmit</code>. CI runs both on Bun 1.3.14.</li>
+  <li><code>bun test</code> discovers <code>test/*.test.ts</code>: graph execution, failures, composition, slicing, advice ordering/inheritance and configuration helpers.</li>
+  <li><code>test/hello-example.test.ts</code> runs the application CLI in temporary directories, checking create/delete, preview, child advice, environment overrides and failures.</li>
+  <li><code>bun run typecheck</code> checks source and tests. The extensionless example launcher is exercised by subprocess tests.</li>
 </ul>
 
-<h2 id="api">12. API index</h2>
-<p>Subpath exports: <code>red</code>, <code>red/workflow</code>, <code>red/advice</code>, <code>red/cli</code>, <code>red/dry-run</code>, <code>red/progress</code>, <code>red/lifecycle</code>, <code>red/runtime</code>. The root re-exports the workflow and CLI API, the <code>advice</code>, <code>dryRun</code>, <code>progress</code> and <code>lifecycle</code> namespaces, and <code>runtime</code>.</p>
+<h2 id="api">11. API index</h2>
+<p>Subpath exports: <code>red</code>, <code>red/workflow</code>, <code>red/advice</code> and <code>red/cli</code>. The root re-exports workflow and configuration APIs plus the <code>advice</code> namespace.</p>
 <div class="table-wrap"><table>
   <tr><th>name</th><th>contract</th></tr>
   <tr><td><code>workflow</code></td><td><code>({start, end?, wireFn, nextFn?}) =&gt; Workflow</code></td></tr>
@@ -329,18 +319,11 @@ COLORS_PAR_MESSAGE=hi ./red create
   <tr><td><code>adviceRemove</code></td><td><code>(wf, step, id) =&gt; Workflow</code></td></tr>
   <tr><td><code>adviceRemoveAll</code></td><td><code>(wf, id) =&gt; Workflow</code></td></tr>
   <tr><td><code>advicePlan</code></td><td><code>(wf | wf[], step) =&gt; PlanEntry[]</code>, outermost first.</td></tr>
-  <tr><td>types</td><td><code>Opts</code>, <code>StepFn</code>, <code>WireFn</code>, <code>WireDecl</code>, <code>NextFn</code>, <code>NextPair</code>, <code>Workflow</code>, <code>PlanEntry</code>, <code>CliConfig</code></td></tr>
+  <tr><td>types</td><td><code>Opts</code>, <code>StepFn</code>, <code>WireFn</code>, <code>WireDecl</code>, <code>NextFn</code>, <code>NextPair</code>, <code>Workflow</code>, <code>PlanEntry</code></td></tr>
   <tr><td><code>advice.*</code></td><td>Registry primitives: <code>hows</code>, <code>add</code>, <code>removeId</code>, <code>addGlobal</code>, <code>removeGlobalId</code>, <code>mergeEntries</code>, <code>mergeRegistry</code>, <code>ordered</code>, <code>compose</code>, <code>truthy</code>, <code>AdviceError</code>.</td></tr>
-  <tr><td><code>runCli</code></td><td><code>(wf, args, config?) =&gt; Promise&lt;Opts&gt;</code>; non-exiting.</td></tr>
-  <tr><td><code>execCli</code></td><td><code>(wf, args?, config?) =&gt; Promise&lt;never&gt;</code>; prints errors, exits.</td></tr>
+  <tr><td><code>loadYaml</code></td><td><code>(text) =&gt; Opts</code>; parse YAML without file IO or overlays; application validates its schema.</td></tr>
   <tr><td><code>readPars</code></td><td><code>(opts, env?) =&gt; Opts</code>; overlay <code>COLORS_PAR_*</code>.</td></tr>
   <tr><td><code>parName</code></td><td><code>(key) =&gt; string</code>; <code>do-token</code> → <code>COLORS_PAR_DO_TOKEN</code>.</td></tr>
-  <tr><td><code>findUp</code></td><td><code>(name, start?) =&gt; string | undefined</code></td></tr>
-  <tr><td><code>usage</code></td><td>The CLI usage string.</td></tr>
-  <tr><td><code>dryRun.advise</code></td><td><code>(wf, steps) =&gt; Workflow</code>; also <code>dryRun.advice(step)</code>, <code>dryRun.SKIP_ID</code>.</td></tr>
-  <tr><td><code>progress.advise</code></td><td><code>(wf) =&gt; Workflow</code>; also <code>progress.progress</code>, <code>progress.PROGRESS_ID</code>.</td></tr>
-  <tr><td><code>lifecycle.preflight</code></td><td><code>(opts, {defaults?, overlay?, validators?, afterValidate?}, env?) =&gt; Promise&lt;Opts&gt;</code></td></tr>
-  <tr><td><code>runtime</code></td><td>Mutable <code>{log}</code> seam for the library's log lines.</td></tr>
 </table></div>
 
 </main>

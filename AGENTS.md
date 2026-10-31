@@ -1,109 +1,50 @@
-# CLAUDE.md
-
-This file gives coding-agent guidance for this repository.
+# AGENTS.md
 
 ## What this is
 
-`red` is the TypeScript/Bun workflow SDK of Colors, one of three SDKs that
-share one model: green (Clojure/Babashka, canonical), red (TypeScript/Bun) and
-blue (Python/uv). Steps are `opts -> opts`; a workflow is a static `wireFn`
-graph plus a dynamic `nextFn` with fan-out and joins; advice is layered;
-desired state is YAML overlaid with `COLORS_PAR_*`; dry-run, progress and
-lifecycle preflight are optional. red is a foundation for deployment code
-written by coding agents; PocketDeploy
-(<https://github.com/pocketcontext/pocketdeploy>, built on blue) is the
-starter package. Steps call cloud CLIs or APIs directly — red has no
-OpenTofu/Ansible integration, template scaffolding or subprocess runner, and
-must not grow them back.
+`red` is the TypeScript/Bun workflow SDK of Colors. Green (Clojure/Babashka)
+is canonical; red and Blue (Python/uv) implement the same model. Keep DAGs,
+subworkflows and the full advice system, including inheritance, ordering and
+inspection. Keep engine-level slicing and YAML/environment configuration
+helpers. Applications own CLI parsing, file discovery, validation, planning,
+progress, logging and durable recovery; do not restore removed convenience
+modules or OpenTofu/Ansible integration.
 
-The behavioral contract lives in `SPEC.md`; `index.html` publishes the same
-spec at <https://getcolors.github.io/red/>. Keep the three in step. This
-repository contains the TypeScript/Bun implementation only; do not add
-Clojure/Babashka source, tests, build tasks, or launchers.
+Read README.md before changes. `SPEC.md` is the behavioral contract and
+`index.html` publishes it. Keep all three accurate. This repository contains
+TypeScript/Bun only; do not add other language implementations.
 
 ## Commands
 
 ```sh
-bun install          # install dev dependencies (red has no runtime deps)
-bun test             # run the test suite, including the example
-bun run typecheck    # run tsc --noEmit
+bun install
+bun test
+bun run typecheck
 ```
 
-Try the example end-to-end (offline, harmless):
+`examples/hello/red` is an application-owned CLI; its create/delete/dry-run
+commands are not SDK entry points. Tests exercise it with temporary files.
+Keep its DAG, embedded greeting workflow and inherited application advice
+working. Source tests are discovered under `test/*.test.ts`.
 
-```sh
-cd examples/hello
-./red create --dry-run
-./red create
-./red delete
-```
+## Architecture and conventions
 
-## Architecture
-
-Modules under `src/`:
-
-- `workflow.ts` — workflow engine. A step is `(opts) => opts | Promise<opts>`
-  named by a namespaced string. `wireFn(step, runOpts)` defines the static graph
-  for the run; optional `nextFn(step, defaultNext, opts)` handles fan-out,
-  conditional routing, retries, and cleanup paths. Independent successors run in
-  parallel promises. Branches that converge join once with results under
-  `"red/branches"`; failed forks collapse and propagate the worst exit.
-  The step boundary deep-freezes input, catches thrown errors, rejects non-plain
-  object returns, stamps `"red/step"`, and removes private inherited-advice
-  state from results. `step(wf, {inFn, outFn})` embeds workflows as ordinary
-  steps.
-
-- `advice.ts` — Emacs `nadvice`-style combinators: `around`, `before`, `after`,
-  `override`, `before-while`, `before-until`, `after-while`, `after-until`,
-  `filter-args`, and `filter-return`. Registries are immutable workflow values.
-  `adviceAdd` targets one step, `adviceAddAll` targets every step. Depth
-  controls stack order (`-100..100`, lower = more outward); equal depth uses
-  newest-outermost ordering. Advice is inherited through embedded workflows by
-  flat step name; same-id ancestor advice replaces child advice.
-
-- `cli.ts` — `runCli` / `execCli`: parses `./red <event> [-f red.yml]
-  [--start step] [--end step] [--dry-run]`, loads YAML with `Bun.YAML.parse`,
-  overlays `COLORS_PAR_*` (`readPars`, `parName`), stamps `"red/event"` and
-  `"red/state-file"`, and runs the workflow. `findUp` supports
-  `searchParents`. Exit 2 is reserved for usage/config errors.
-
-- `lifecycle.ts` — `preflight`: defaults, optional overlay, ordered
-  validators (errors → exit 2) and an `afterValidate` callback.
-
-- `dry-run.ts` — `dryRun.advise(wf, steps)` adds around advice that logs and
-  skips listed steps when `"red/dry-run"` is true.
-
-- `progress.ts` — all-step around advice logging entry/exit timings.
-
-- `runtime.ts` — the mutable `runtime.log` seam used by dry-run and progress so
-  tests can capture output. There is no subprocess runner; steps spawn
-  commands themselves.
-
-## Example
-
-- `examples/hello` — steps call `uname`, `mkdir`, `cat`, `rm` directly;
-  lifecycle preflight, `nextFn` fan-out per name, a join, progress and dry-run
-  advice, `COLORS_PAR_*` overrides. `test/hello-example.test.ts` drives the
-  real launcher; keep it passing when changing the example or the CLI.
-
-## Conventions
-
-- All cross-step state is one open `Opts` object. Engine keys are `red/*` and
-  private `red.*/*`; project/library keys should be namespace-like strings such
-  as `"app/servers"`. Desired-state inputs that may be overridden by
-  `COLORS_PAR_*` stay flat kebab-case.
-- Keep public constructors and advice-transforming functions pure. Return new
-  workflow values; do not mutate existing workflows.
-- Steps should return new objects (`{...opts, ...}`), not mutate input. The
-  engine freezes step input to make thrown-step partial mutation impossible.
-- Errors are opts values, not exceptions escaping the engine. Throw `StepError`
-  only when a step/advice wants the step boundary to convert it to
-  `"red/exit"`/`"red/err"`/`"red/trace"`.
-- Keep output keys namespaced (`"my.ns/result"`); never merge command or API
-  outputs into top-level opts by default.
-- For consumer docs, prefer version-pinned npm specifiers once published. Until
-  then, document pinned git dependencies via `package.json`; do not recommend
-  unpinned Bun auto-install imports.
+- `src/workflow.ts` owns static/dynamic graphs, parallel joins, failed-fork
+  collapse, input freezing, error conversion and subworkflow composition.
+  Steps return new options objects. Keep workflow constructors pure.
+- `src/advice.ts` owns the ten Emacs nadvice-style combinators and immutable
+  registries. Keep depth/add ordering, same-id replacement, transitive
+  inheritance by flat step name and `advicePlan` inspection consistent.
+- `src/cli.ts` retains its historical module path for `loadYaml`, `readPars`
+  and `parName`. There is no parser, runner, file discovery or process-exit
+  policy in the SDK. Bun supplies YAML parsing without a runtime dependency.
+- Engine keys are `red/*` and private `red.*/*`; applications use their own
+  namespace for events, paths, preview flags and results. Environment inputs
+  remain flat kebab-case. Never merge arbitrary provider output at top level.
+- Subworkflow output adapters must preserve or deliberately handle failures.
+  Parent advice can target nested step names; use namespaced names.
+- No npm release exists: external dependencies must use a published git SHA,
+  not unpinned auto-install imports. In-repo examples use relative imports.
 - Ignore `node_modules/`, `dist/`, `target/`, and example `work/` directories.
 
 ## Documentation

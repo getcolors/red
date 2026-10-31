@@ -1,129 +1,105 @@
 # red
 
 `red` is the TypeScript/Bun workflow SDK of [Colors](https://www.getcolors.ai/).
-Coding agents now write deployment code directly; the colors are the
-foundation for that code. Three SDKs share one model —
-[green](https://github.com/getcolors/green) (Clojure/Babashka, canonical),
-red (TypeScript/Bun) and [blue](https://github.com/getcolors/blue)
-(Python/uv):
+[Green](https://github.com/getcolors/green) (Clojure/Babashka, canonical), red
+and [Blue](https://github.com/getcolors/blue) (Python/uv) implement one model:
 
-- a step is `(opts) => opts`, threading one plain object;
-- a workflow is a static `wireFn` graph plus a dynamic `nextFn`, with
-  parallel fan-out and joins;
-- layered, Emacs `nadvice`-style advice for cross-cutting behaviour;
-- YAML desired state with `COLORS_PAR_*` environment overrides;
-- optional dry-run, progress and lifecycle preflight helpers.
+- **DAG execution:** steps take and return an options map; static `wireFn`
+  graphs and optional dynamic `nextFn` routing support parallel fan-out,
+  joins and failure propagation.
+- **Subworkflows:** `step(wf, { inFn, outFn })` embeds a reusable workflow as
+  an ordinary step.
+- **Advice:** workflow-scoped wrappers attach behaviour without changing
+  steps, with ordering, inheritance and stack inspection.
+- **Configuration helpers:** YAML parsing and `COLORS_PAR_*` overlays.
 
-Steps call cloud CLIs or APIs directly. Build your own package on red, or
-start from [PocketDeploy](https://github.com/pocketcontext/pocketdeploy), the
-starter package built on blue. OpenTofu and Ansible support was removed on
-2026-10-29.
+Applications own their CLI, file selection, validation, planning, progress,
+logging and durable recovery. They may implement policies through advice;
+red does not bundle dry-run, progress or lifecycle helpers. Steps call CLIs
+or APIs directly. [PocketDeploy](https://github.com/pocketcontext/pocketdeploy)
+is a deployment controller built on Blue, with its own state journal.
 
-The full behavioral contract is in [`SPEC.md`](SPEC.md); the same spec is
-published at <https://getcolors.github.io/red/>.
+The full behavioral contract is in [SPEC.md](SPEC.md), also published at
+<https://getcolors.github.io/red/>. Shared semantics do not make application
+code mechanically portable between languages.
 
-## Install
+## Install and develop
 
-For development in this repository:
+red has no runtime dependencies beyond Bun. It is not published to npm;
+consumers must use a git dependency pinned to a published commit in
+`package.json`, then import from `red` or its module paths.
 
 ```sh
 bun install
+bun test
+bun run typecheck
 ```
 
-red has no runtime dependencies. For consumers, use a version-pinned package
-once `red` is published to npm (`import { workflow, execCli } from
-"red@x.y.z"`). Until an npm release exists, use a minimal `package.json` with a
-pinned git dependency and import from `red` there. Do not use an unpinned
-specifier.
-
-## Commands
-
-```sh
-bun test              # run the test suite (includes the example)
-bun run typecheck     # run tsc --noEmit
-```
-
-## The model in one glance
+## DAGs, subworkflows and advice
 
 ```ts
-import { execCli, failed, type Opts, workflow } from "red";
+import { adviceAddAll, run, step, workflow, type Opts, type StepFn } from "red";
 
-const mark = (name: string) => (opts: Opts) => ({
-  ...opts,
-  seen: [...(opts.seen ?? []), name],
+const mark = (name: string): StepFn => (opts) => ({ ...opts, [name]: true });
+const child = workflow({
+  start: "child/prepare",
+  wireFn: (name) => name === "child/prepare" ? [mark("prepared")] : undefined,
 });
-
-const wf = workflow({
+const graph = workflow({
   start: "app/start",
-  wireFn: (step) => {
-    switch (step) {
-      case "app/start": return [mark("start"), "app/node"];
-      case "app/node": return [mark("node"), "app/join"];
-      case "app/join": return [mark("join")];
+  wireFn: (name) => {
+    switch (name) {
+      case "app/start": return [mark("started"), "app/child", "app/other"];
+      case "app/child": return [step(child), "app/join"];
+      case "app/other": return [mark("other"), "app/join"];
+      case "app/join": return [(opts) => ({ ...opts, results: opts["red/branches"] })];
     }
-  },
-  // fan out one branch per server; the branches join at app/join
-  nextFn: (step, defaultNext, opts) => {
-    if (failed(opts)) return [];
-    if (step === "app/start") {
-      return opts.servers.map((server: unknown) => ["app/node", { ...opts, "app/server": server }] as const);
-    }
-    return (defaultNext ?? []).map((s) => [s, opts] as const);
   },
 });
-
-if (import.meta.main) await execCli(wf);
+const observed = adviceAddAll(graph, "around", "app/log", async (base: StepFn, opts: Opts) => {
+  console.log(opts["red/step"]);
+  return await base(opts);
+});
+const result = await run(observed, {});
 ```
 
-Run a project launcher as:
+The two branches join once. Parent advice also reaches `child/prepare`.
+`advicePlan` shows the composed stack. Child failures propagate by default;
+an `outFn` must preserve or deliberately handle failure keys when adapting
+results. Workflow execution is in-memory, not a durable recovery journal.
 
-```sh
-./red create              # loads ./red.yml
-./red delete -f red.yml
-./red create --dry-run
-./red create --start app/node --end app/node
+## Configuration
+
+```ts
+import { loadYaml, readPars, parName } from "red/cli";
+const config = readPars(loadYaml(await Bun.file("colors.yml").text()));
 ```
 
-## Core concepts
-
-- **Opts** are one open plain object threaded through every step. Engine keys
-  live under `red/*` (`"red/exit"`, `"red/err"`, `"red/event"`,
-  `"red/branches"`, ...); project data uses its own namespace-like keys.
-- A **step** is `(opts) => opts | Promise<opts>`. The engine deep-freezes step
-  input, catches thrown errors (`StepError` chooses the exit code), rejects
-  non-plain-object returns, and stamps `"red/exit": 0` on success.
-- A **workflow** is a static `wireFn` graph plus an optional dynamic `nextFn`.
-  Independent successors run concurrently; converging branches join once with
-  branch results under `"red/branches"`; failed forks collapse cleanly.
-- **Advice** is workflow-scoped: `around`, `before`, `after`, `override`,
-  while/until variants, `filter-args`, `filter-return`. It targets one step or
-  all steps, stacks by depth and add order, and is inherited through embedded
-  workflows (`step(subWorkflow, { inFn, outFn })`).
-- **Desired state** is `red.yml`, overlaid with `COLORS_PAR_*` variables onto
-  flat kebab-case keys (`COLORS_PAR_DO_TOKEN` → `do-token`).
-- **Dry-run, progress and lifecycle preflight** are optional helpers built on
-  advice and plain steps, not engine features.
+The historical `red/cli` module path is retained for configuration helpers
+only. `loadYaml` parses YAML text with Bun's YAML 1.2 reader; it does not
+read files, validate a schema, or stamp control keys. `readPars` overlays
+flat kebab-case keys from `COLORS_PAR_*`, coercing existing booleans and
+integers. `parName("do-token")` returns `COLORS_PAR_DO_TOKEN`. Quote
+version-like YAML values such as `"3.10"` and keep credentials outside YAML.
+Applications choose their configuration filename and whether to apply overlays.
 
 ## Modules
 
-```ts
-import { workflow, run, step, adviceAdd, failed, StepError } from "red/workflow";
-import * as advice from "red/advice";
-import * as dryRun from "red/dry-run";
-import * as progress from "red/progress";
-import { preflight } from "red/lifecycle";
-import { runCli, execCli, readPars, parName, findUp } from "red/cli";
-import { runtime } from "red/runtime"; // runtime.log, stubbable in tests
-```
+- `red/workflow`: execution, composition, advice registration/inspection and types.
+- `red/advice`: combinators and immutable registry operations.
+- `red/cli`: `loadYaml`, `readPars`, `parName`.
 
-The root export (`red`) re-exports the workflow and CLI API plus the
-`advice`, `dryRun`, `progress` and `lifecycle` namespaces and `runtime`.
+The root `red` export exposes workflow/configuration names and the `advice`
+namespace. The full advice system and engine-level `start`/`end` slicing
+remain supported; the library supplies no generic CLI flags.
 
 ## Example
 
-[`examples/hello`](examples/hello) is a small package whose steps call local
-command-line tools (`uname`, `mkdir`, `cat`, `rm`). It fans out one branch per
-name, joins them, and supports `create`, `delete` and `--dry-run`:
+[examples/hello](examples/hello) is an offline application with its own CLI.
+It validates desired state, discovers the host with `uname`, fans out one
+embedded write/verify workflow per unique name, then joins to read the files back.
+Application-defined advice logs stages (including child steps) and skips
+writes in its preview mode. These policies live in the example, not in red.
 
 ```sh
 cd examples/hello
@@ -133,16 +109,5 @@ COLORS_PAR_MESSAGE=hi ./red create
 ./red delete
 ```
 
-## Desired state YAML
-
-`runCli` loads `red.yml` by default, overlays `COLORS_PAR_*`, stamps
-`"red/event"` and `"red/state-file"`, and runs the workflow:
-
-```yaml
-workdir: work
-message: hello
-names: [alice, bob]
-```
-
-Quote version-like values such as `"3.10"`; YAML would otherwise parse them as
-numbers. Keep credentials in `COLORS_PAR_*` variables, never in the file.
+`test/hello-example.test.ts` drives this CLI in temporary directories and
+checks composition, inherited advice, previews, configuration and failures.

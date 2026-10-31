@@ -10,15 +10,13 @@
 // hello/greet fans out through nextFn; the branches join at hello/report.
 //
 // In-repo example: red is imported by relative path. A real package would
-// depend on a pinned red release instead.
+// depend on red by a pinned git commit until a release is published.
 
-import { dirname, isAbsolute, join } from "node:path";
-import { execCli } from "../../src/cli.ts";
-import * as dryRun from "../../src/dry-run.ts";
-import { preflight } from "../../src/lifecycle.ts";
-import * as progress from "../../src/progress.ts";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { loadYaml, readPars } from "../../src/cli.ts";
 import type { Opts, StepFn } from "../../src/workflow.ts";
-import { failed, StepError, workflow } from "../../src/workflow.ts";
+import { adviceAdd, adviceAddAll, failed, run, step as embed, StepError, workflow } from "../../src/workflow.ts";
 
 // Run a command and return its trimmed stdout; a non-zero exit throws a
 // StepError, which the step boundary turns into "red/exit"/"red/err".
@@ -36,27 +34,30 @@ async function sh(cmd: string[]): Promise<string> {
 // Relative paths in red.yml resolve against red.yml, not the current directory.
 const workdir = (opts: Opts): string => {
   const dir = String(opts.workdir ?? "work");
-  return isAbsolute(dir) ? dir : join(dirname(String(opts["red/state-file"])), dir);
+  return isAbsolute(dir) ? dir : join(dirname(String(opts["hello/state-file"])), dir);
 };
 
 const fileFor = (opts: Opts, name: string) => join(workdir(opts), `${name}.txt`);
 
-const check: StepFn = (opts) =>
-  preflight(opts, {
-    defaults: { message: "hello" },
-    validators: [
-      (o) => Array.isArray(o.names) && o.names.length > 0 ? [] : ["names: list at least one name"],
-      (o) => (o.names ?? []).every((n: unknown) => typeof n === "string" && /^[a-z0-9-]+$/.test(n))
-        ? [] : ["names: use lowercase letters, digits and dashes"],
-    ],
-  });
+const check: StepFn = (opts) => {
+  if (!Array.isArray(opts.names) || opts.names.length === 0) {
+    throw new StepError("names: list at least one name", { exit: 2 });
+  }
+  if (!opts.names.every((n: unknown) => typeof n === "string" && /^[a-z0-9-]+$/.test(n))) {
+    throw new StepError("names: use lowercase letters, digits and dashes", { exit: 2 });
+  }
+  if (new Set(opts.names).size !== opts.names.length) {
+    throw new StepError("names: each name must be unique", { exit: 2 });
+  }
+  return { message: "hello", ...opts };
+};
 
 const host: StepFn = async (opts) => ({ ...opts, "hello/host": await sh(["uname", "-sm"]) });
 
 const greet: StepFn = async (opts) => {
   const name = opts["hello/name"] as string;
   const file = fileFor(opts, name);
-  if (opts["red/event"] === "delete") {
+  if (opts["hello/event"] === "delete") {
     await sh(["rm", "-f", file]);
     return opts;
   }
@@ -65,8 +66,20 @@ const greet: StepFn = async (opts) => {
   return { ...opts, "hello/file": file };
 };
 
+// Keep each item's write and verification inside one embedded operation.
+const verify: StepFn = async (opts) => {
+  const name = opts["hello/name"] as string;
+  const file = Bun.file(fileFor(opts, name));
+  if (opts["hello/event"] === "delete") {
+    if (await file.exists()) throw new StepError("greeting was not removed");
+  } else if (await file.text() !== `${opts.message}, ${name}, from ${opts["hello/host"]}\n`) {
+    throw new StepError("greeting verification failed");
+  }
+  return opts;
+};
+
 const report: StepFn = async (opts) => {
-  if (opts["red/event"] === "delete") {
+  if (opts["hello/event"] === "delete") {
     // rmdir only removes an empty directory; anything else stays put
     await sh(["sh", "-c", `rmdir "$1" 2>/dev/null || true`, "sh", workdir(opts)]);
     console.log(`removed greetings from ${workdir(opts)}`);
@@ -78,13 +91,24 @@ const report: StepFn = async (opts) => {
   return { ...opts, "hello/files": files };
 };
 
-export const hello = dryRun.advise(progress.advise(workflow({
+// A reusable operation is itself a workflow, embedded as the greeting step.
+const greeting = workflow({
+  start: "hello/write",
+  wireFn: (name) => {
+    switch (name) {
+      case "hello/write": return [greet, "hello/verify"];
+      case "hello/verify": return [verify];
+    }
+  },
+});
+
+let hello = workflow({
   start: "hello/check",
   wireFn: (step) => {
     switch (step) {
       case "hello/check": return [check, "hello/host"];
       case "hello/host": return [host, "hello/greet"];
-      case "hello/greet": return [greet, "hello/report"];
+      case "hello/greet": return [embed(greeting), "hello/report"];
       case "hello/report": return [report];
     }
   },
@@ -95,8 +119,42 @@ export const hello = dryRun.advise(progress.advise(workflow({
     }
     return (defaultNext ?? []).map((s) => [s, opts] as const);
   },
-})), ["hello/greet", "hello/report"]);
+});
 
+// These policies belong to this application, not to the SDK. All-step advice
+// is inherited by nested hello/write and hello/verify steps without changing their workflow.
+hello = adviceAddAll(hello, "around", "hello/report-stage", async (base: StepFn, opts: Opts) => {
+  console.log(`>>> ${opts["red/step"]} (${opts["hello/event"]})`);
+  return await base(opts);
+});
+for (const name of ["hello/greet", "hello/report"]) {
+  hello = adviceAdd(hello, name, "around", "hello/preview", async (base: StepFn, opts: Opts) => {
+    if (opts["hello/dry-run"]) {
+      console.log(`dry-run: would run ${name} (${opts["hello/event"]})`);
+      return opts;
+    }
+    return await base(opts);
+  });
+}
+export { hello };
+
+// File selection, validation, command names and exit policy are app-owned.
 if (import.meta.main) {
-  await execCli(hello, Bun.argv.slice(2), { allowedEvents: ["create", "delete"] });
+  let result: Opts;
+  try {
+    const { values, positionals } = parseArgs({ args: Bun.argv.slice(2), allowPositionals: true,
+      options: { file: { type: "string", short: "f", default: "red.yml" }, "dry-run": { type: "boolean" } } });
+    if (positionals.length !== 1 || !["create", "delete"].includes(positionals[0]!)) {
+      throw new Error("Usage: red create|delete [-f red.yml] [--dry-run]");
+    }
+    const file = resolve(values.file);
+    const state = loadYaml(await Bun.file(file).text());
+    if (!state || typeof state !== "object" || Array.isArray(state)) throw new Error("Expected a YAML mapping");
+    result = await run(hello, { ...readPars(state), "hello/event": positionals[0],
+      "hello/state-file": file, "hello/dry-run": values["dry-run"] ?? false });
+  } catch (error) {
+    result = { "red/exit": 2, "red/err": error instanceof Error ? error.message : String(error) };
+  }
+  if (result["red/err"]) console.error(result["red/err"]);
+  process.exit(result["red/exit"] ?? 0);
 }

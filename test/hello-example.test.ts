@@ -41,6 +41,9 @@ test.skipIf(process.platform === "win32")("create writes and reads back one file
     // the fan-out joined: hello/report ran exactly once
     expect(created.out.match(/>>> hello\/report/g)).toHaveLength(1);
     expect(created.out.match(/>>> hello\/greet/g)).toHaveLength(3);
+    // Parent advice reaches the embedded workflow once per greeting.
+    expect(created.out.match(/>>> hello\/write/g)).toHaveLength(3);
+    expect(created.out.match(/>>> hello\/verify/g)).toHaveLength(3);
 
     const deleted = await red(["delete", "-f", p.file]);
     expect(deleted.exit).toBe(0);
@@ -100,6 +103,18 @@ test.skipIf(process.platform === "win32")("a failing command becomes the step's 
     expect(res.exit).toBe(1);
     expect(res.err).toContain("mkdir -p");
     expect(res.out).not.toContain(">>> hello/report");
+  } finally {
+    rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+test("duplicate names fail validation before parallel writes", async () => {
+  const p = project("workdir: work\nnames: [alice, alice]\n");
+  try {
+    const result = await red(["create", "-f", p.file]);
+    expect(result.exit).toBe(2);
+    expect(result.err).toContain("each name must be unique");
+    expect(existsSync(p.work)).toBe(false);
   } finally {
     rmSync(p.root, { recursive: true, force: true });
   }

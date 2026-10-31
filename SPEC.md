@@ -5,8 +5,8 @@
 implement the same model: steps are `opts -> opts` functions, a workflow is a
 static `wireFn` graph plus a dynamic `nextFn`, branches fan out and join,
 advice layers cross-cutting behaviour, and desired state is YAML overlaid with
-`COLORS_PAR_*` environment variables. Dry-run, progress and lifecycle
-preflight are optional advice-level helpers.
+`COLORS_PAR_*` environment variables. Subworkflows compose as ordinary steps.
+Applications own their CLI, validation, planning, progress and recovery.
 
 red is a foundation for deployment code written by coding agents. Steps call
 cloud CLIs or APIs directly; the library has no OpenTofu, Ansible or template
@@ -15,8 +15,7 @@ built on blue, is the starter package.
 
 The port is **behavioral**: green is the canonical model, and the TypeScript
 test suite locks that behavior into red's language-specific contract.
-Conventions stay structurally identical to green's — a green project ports to
-red by mechanical rename.
+The shared semantics do not make application code mechanically portable.
 
 ## Naming
 
@@ -25,15 +24,12 @@ Everything called `green` is called `red`:
 | green                      | red                          |
 |----------------------------|------------------------------|
 | `:green/exit` etc.         | `"red/exit"` etc.            |
-| `green.edn`                | `red.yml`                    |
-| `./green` (babashka)       | `./red` (Bun)                |
 | `green.workflow` ns        | `red/workflow` module        |
 
 Namespaced keywords become namespaced **string keys**: `:app/servers` →
 `"app/servers"`. Keyword *values* become plain strings: `:create` → `"create"`.
 The engine reserves the `red/*` and `red.*/*` namespaces for its control keys
-(`"red/exit"`, `"red/err"`, `"red/trace"`, `"red/event"`, `"red/dry-run"`,
-`"red/step"`, `"red/branches"`, plus private keys such as
+(`"red/exit"`, `"red/err"`, `"red/trace"`, `"red/step"`, `"red/branches"`, plus private keys such as
 `"red.workflow/inherited"`); everything project-specific uses its own
 namespace.
 
@@ -43,7 +39,7 @@ All cross-step state is one plain object threaded through the graph. The base
 type is open (`Opts = { [key: string]: unknown }` plus the typed engine keys);
 steps read the keys they declare and pass everything else through untouched.
 There is deliberately no closed "all keys" interface; a package validates the
-keys it needs (see `lifecycle.preflight`).
+keys it needs.
 
 The engine recursively freezes plain objects and arrays at each step boundary,
 including nested values inside already-frozen containers. Map, Set, Date,
@@ -62,7 +58,7 @@ branch.
   string (`"app/node"`).
 - **wireFn** `(step, runOpts) => [fn, ...nextSteps] | undefined` — the static
   happy-path graph for this run; may depend on stable run-level inputs such as
-  `"red/event"`. `runOpts` is the run's *initial* opts, stable for the whole
+  `"app/event"`. `runOpts` is the run's *initial* opts, stable for the whole
   run, so the static graph never flaps.
 - **nextFn** (optional) `(step, defaultNext, opts) => [[nextStep, opts], ...]`
   — dynamic routing: fan-out, conditional branching, error rerouting.
@@ -70,12 +66,6 @@ branch.
 - `workflow({start, end?, wireFn, nextFn?})` constructs a workflow **value**;
   every constructor/advice function is pure — workflows are safe to branch
   and share. `end` is an inclusive slice boundary (runs, then stops).
-- `step(wf, {inFn?, outFn?})` turns a workflow into an ordinary step function so
-  workflows compose. `inFn` shapes the opts entering the sub-workflow, `outFn`
-  merges the result back (default: the sub-result is the step's result).
-  Ambient keys (`"red/event"`, `"red/dry-run"`) flow in with opts; a custom
-  `inFn` must carry them itself if the sub-workflow needs them.
-
 ## Scheduler semantics
 
 The scheduler runs all safe-to-run steps in parallel, waits when branches may
@@ -100,6 +90,17 @@ failure:
    failed one, else the last successful one. The private inherited-advice key
    never leaks into results.
 
+## Subworkflows
+
+`step(wf, {inFn?, outFn?})` turns a workflow into an ordinary step function.
+It can be wired, advised and fanned out like any other step. `inFn` shapes
+child opts; `outFn(parentOpts, childResult)` adapts the result back. By
+default the child's result, including its exit/error keys, becomes the parent
+step's result. A custom `outFn` must preserve or explicitly handle failures.
+Application context flows with opts; a rebuilding `inFn` must carry the
+application keys its child needs. Advice inheritance survives that adapter.
+Execution is in-memory; subworkflows do not supply durable recovery or state.
+
 ## Error model
 
 Errors are values, never control flow. No Result/Either types — failed opts
@@ -118,10 +119,8 @@ must flow through nextFn routing and `"red/branches"` as ordinary data.
 - Without a nextFn, a failed step produces no successors — the branch halts.
   With one, routing failures (cleanup, retry paths) is user logic.
 - Steps must await everything they start; a stray un-awaited rejection cannot
-  be attributed to a branch. `execCli` installs an `unhandledRejection`
-  handler that reports and exits nonzero.
-- The CLI reserves exit 2 for usage/config errors; step code should not
-  claim it.
+  be attributed to a branch. Applications own process-level error handling
+  and command exit policies.
 
 ## Advice
 
@@ -149,100 +148,53 @@ Emacs nadvice combinators, workflow-scoped, pure values:
 - `advicePlan(wfOrChain, step)` shows the composed stack outermost-first with
   provenance (`scope: "step"|"all"`, `level` = chain depth).
 
-## Config: red.yml and COLORS_PAR_*
+## Configuration helpers
 
-Desired state is pure data in YAML (comments encouraged), parsed with
-`Bun.YAML.parse` (verified YAML 1.2 on Bun 1.3.14: `no` is a string,
-`app/…` keys parse unquoted). Loaded keys land in opts unchanged, plus
-`"red/state-file"`: the absolute path of the file, so a package resolves its
-relative paths against the file rather than the current directory. Caveat to
-document in every project: version-like values (`3.10`) must be quoted or YAML
-reads them as numbers.
+`red/cli` retains its historical module path, but contains only `loadYaml`,
+`readPars` and `parName`. `loadYaml(text)` parses YAML with `Bun.YAML.parse`
+(YAML 1.2: `no` and dates remain strings). It returns an empty object for
+empty/null input and otherwise the parsed data; the application validates
+that its expected mapping/schema is present. It reads no files and stamps
+no paths or event keys. Quote version-like values such as `"3.10"`.
 
-After loading, `readPars(opts, env)` overlays every `COLORS_PAR_<UPPER_SNAKE>`
-variable onto the flat kebab-case key it names (`COLORS_PAR_DO_TOKEN` →
-`do-token`; `parName(key)` is the inverse). The value is coerced to the type
-of the key's existing value: `true`/`false` for booleans, decimal integers for
-integers, a string otherwise. One namespace is shared by green, red and blue;
-there is no per-colour prefix. Credentials belong in these variables, never in
-`red.yml`. Namespaced keys (`app/x`) cannot be overlaid; keep overridable
-inputs flat.
+`readPars(opts, env?)` overlays every `COLORS_PAR_<UPPER_SNAKE>` variable onto
+its flat kebab-case key (`COLORS_PAR_DO_TOKEN` → `do-token`); `parName` maps
+in the other direction. Existing boolean values accept `true`/`false` and
+existing integers accept decimal integers; other values remain strings.
+The namespace is shared across all colors. Credentials belong outside YAML.
 
-Validation is the package's job, typically as its first step or a
-`before-while` advice; validators return the original opts, never a
-transformed copy.
+## Application boundary
 
-## Lifecycle preflight
-
-`lifecycle.preflight(opts, config, env?)` is a reusable first step:
-`defaults` are merged under the opts, an optional `overlay(opts, env)` runs,
-then every `validators[i](opts, env, {event, real})` contributes error
-strings (`real` is false under dry-run). Any errors → `"red/exit": 2` with
-the errors joined by newlines in `"red/err"`; otherwise `afterValidate` (if
-given) produces the result, else `"red/exit": 0`.
-
-## Dry-run and progress
-
-Built on advice, not the engine:
-
-- `dryRun.advise(wf, steps)` attaches an `around` advice (id
-  `"red.dry-run/skip"`) to the listed steps: when `"red/dry-run"` is set
-  (stamped by `--dry-run`), print `dry-run: would run <step> (<event>)` and
-  skip. Removable per step with `adviceRemove`.
-- `progress.advise(wf)` attaches an `around` advice (id
-  `"red.progress/progress"`) to every step: `>>> <step> (<event>)` on entry,
-  `<<< <step> (<n>ms)` on exit, reading `"red/step"` from opts.
-- Both log through `runtime.log`, a mutable seam tests replace to capture
-  output. `runtime` has no subprocess runner: steps spawn commands themselves
-  (`Bun.spawn`, `Bun.$`) or call APIs with `fetch` or an SDK client.
-
-## CLI
-
-`./red <event> [-f|--file red.yml] [--start step] [--end step] [--dry-run]`,
-parsed with `util.parseArgs` (event is the positional). `runCli(wf, args)` is
-the non-exiting, testable form: loads YAML, overlays `COLORS_PAR_*`, stamps
-`"red/event"` (and `"red/dry-run"`), applies workflow slicing, runs,
-returns final opts; exit 2 with a message on usage/missing-file/parse errors.
-`execCli(wf, args)` prints `"red/err"`/`"red/trace"` to stderr and
-`process.exit`s with `"red/exit"`.
-
-`CliConfig` options: `defaultFile` (default `red.yml`), `searchParents`
-(find the default file in the nearest ancestor directory via `findUp`) and
-`allowedEvents` (any other event is a usage error).
-
-## The ./red launcher
-
-A project's `./red` is a **self-contained Bun script**: `#!/usr/bin/env bun`,
-executable, no build step. It holds the workflow definition, advice wiring,
-the steps (which call CLIs or APIs directly) and the `execCli` call. The
-in-repo example imports red by relative path; external consumers should
-depend on a pinned version — a version-pinned npm specifier once red is
-published, until then a pinned git dependency in `package.json`; never an
-unpinned specifier. `import.meta.dir` locates the script; `import.meta.main`
-distinguishes launch from import, so the workflow can be exported for tests.
+The SDK has no generic CLI, configuration discovery, generated-directory
+helper, lifecycle preflight, bundled dry-run/progress policy or logging seam.
+Applications select files, validate inputs, implement commands and report
+results. They may attach application-defined advice for reporting, guards or
+preview behavior. Engine-level `start` and inclusive `end` remain available.
+The runner provides execution, not persistence, cloud ownership or recovery.
 
 ## Example
 
-`examples/hello` is the reference package: `hello/check` (lifecycle
-preflight) → `hello/host` (`uname -sm`) → `hello/greet` fanned out per name by
-`nextFn` (writes one file per name on create, `rm -f` on delete) → the
-`hello/report` join (`cat` the files back on create, `rmdir` the empty
-workdir on delete). Progress advice wraps every step; dry-run advice skips
-`hello/greet` and `hello/report`. It is offline and harmless.
+`examples/hello/red` is an application-owned Bun CLI. It parses create/delete
+and a preview flag, loads its selected YAML and runs a graph:
+`hello/check` → `hello/host` → `hello/greet` per name → `hello/report`.
+`hello/greet` embeds a subworkflow with `hello/write` → `hello/verify`: each
+item is written/removed and verified before returning to the parent. The application
+adds all-step logging advice, inherited by that child, and per-step preview
+advice skipping `hello/greet` and `hello/report`. Steps run `uname`, write
+files, read them with `cat`, and remove only greeting files/empty directories.
 
-## Testing
+The executable imports red by relative path. External consumers must depend
+on a published git commit in `package.json` until an npm release exists.
 
-`bun test`; files auto-discovered as `test/*.test.ts`. Engine, advice, CLI,
-dry-run, progress and lifecycle behaviour are unit-tested in-process;
-`test/hello-example.test.ts` drives `examples/hello/red` as a subprocess
-(create, delete, dry-run, `COLORS_PAR_*` overlay, validation and command
-failure). `bun run typecheck` runs `tsc --noEmit` over `src` and `test` (the
-extensionless launcher is exercised by its test rather than by `tsc`).
+## Testing and layout
 
-## Repository layout
+`bun test` discovers `test/*.test.ts`. Workflow and advice tests cover graphs,
+joins, failure collapse, composition, slicing, depth and inheritance.
+Configuration tests cover YAML scalars and environment overlays. Example tests
+run the real CLI in temporary directories, including child advice, preview,
+create/delete, validation and command failure. `bun run typecheck` checks
+TypeScript source and tests; the extensionless launcher is exercised by its
+subprocess tests.
 
-TypeScript source lives in `src/*.ts`; tests live in `test/*.test.ts`. The
-example is a self-contained Bun launcher at `examples/hello/red` with desired
-state in `red.yml`. red has no runtime dependencies; `package.json` exists for
-publication and the dev toolchain.
-
+Source modules are `src/workflow.ts`, `src/advice.ts`, `src/cli.ts` and their
+root exports in `src/index.ts`. Bun is the only runtime requirement.

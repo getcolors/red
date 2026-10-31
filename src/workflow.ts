@@ -2,7 +2,7 @@
 //
 // - wireFn: (step, runOpts) -> [fn, ...nextSteps] — the static happy-path
 //   graph for this run. It may depend on stable run-level inputs such as
-//   "red/event". Multiple successors run in parallel.
+//   "app/event". Multiple successors run in parallel.
 // - nextFn (optional): (step, defaultNext, opts) -> [[nextStep, opts], ...]
 //   — dynamic routing, error branching, fan-out.
 // - Steps report outcome via "red/exit" (0 ok, >0 error), "red/err",
@@ -633,7 +633,7 @@ async function schedulerStep(
 // Turn a workflow into a step function (opts -> Promise<opts>), so workflows
 // compose into higher-level workflows: wire the result like any other step,
 // advise it, fan it out. The sub-workflow's "red/exit" propagates naturally,
-// and ambient keys like "red/event" and "red/dry-run" flow in with opts.
+// and ambient keys like "app/event" and "app/dry-run" flow in with opts.
 //
 // The enclosing run's advice is inherited: the nested run merges it over the
 // sub-workflow's own. The engine re-stamps the inherited registry after `inFn`

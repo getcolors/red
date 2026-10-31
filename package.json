@@ -1,18 +1,14 @@
 {
   "name": "red",
   "version": "0.1.0",
-  "description": "Workflow SDK for deployment code written by coding agents: steps as opts -> opts functions, a wireFn graph with a dynamic nextFn, layered advice, and YAML desired state with COLORS_PAR_* overrides.",
+  "description": "TypeScript/Bun workflow SDK: DAG execution, composable subworkflows, layered advice, and YAML configuration with COLORS_PAR_* overrides.",
   "type": "module",
   "license": "EPL-1.0",
   "exports": {
     ".": "./src/index.ts",
     "./workflow": "./src/workflow.ts",
     "./advice": "./src/advice.ts",
-    "./dry-run": "./src/dry-run.ts",
-    "./progress": "./src/progress.ts",
-    "./cli": "./src/cli.ts",
-    "./runtime": "./src/runtime.ts",
-    "./lifecycle": "./src/lifecycle.ts"
+    "./cli": "./src/cli.ts"
   },
   "scripts": {
     "test": "bun test",
